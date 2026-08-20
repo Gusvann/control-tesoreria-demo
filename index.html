@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dashboard demostrativo de tesorería con posición bancaria, flujo proyectado y próximos movimientos. Todos los datos son simulados."
+    />
+    <title>Control de Tesorería | Iván Mota</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#inicio" aria-label="Ir al inicio">
+          <span class="brand-mark" aria-hidden="true">IM</span>
+          <span>
+            <strong>Iván Mota</strong>
+            <small>Portafolio financiero</small>
+          </span>
+        </a>
+
+        <div class="topbar-actions">
+          <span class="data-pill">
+            <span class="data-pill-dot" aria-hidden="true"></span>
+            Datos 100% simulados
+          </span>
+          <span class="last-update" id="lastUpdate"></span>
+        </div>
+      </header>
+
+      <main id="inicio">
+        <section class="hero" aria-labelledby="pageTitle">
+          <div>
+            <p class="eyebrow">DEMO DE TESORERÍA</p>
+            <h1 class="split-heading" id="pageTitle">
+              <span>Liquidez bajo control.</span>
+              <span>Decisiones a tiempo.</span>
+            </h1>
+            <p class="hero-copy">
+              Una vista sencilla para revisar saldos, anticipar entradas y salidas,
+              y detectar necesidades de efectivo antes de que se conviertan en un problema.
+            </p>
+          </div>
+
+          <form class="scenario-panel" id="scenarioForm">
+            <div class="field-group">
+              <label for="horizon">Horizonte</label>
+              <select id="horizon" name="horizon">
+                <option value="7">7 días</option>
+                <option value="14" selected>14 días</option>
+                <option value="30">30 días</option>
+              </select>
+            </div>
+
+            <label class="toggle-row" for="includePending">
+              <span>
+                <strong>Movimientos por confirmar</strong>
+                <small>Inclúyelos en el escenario</small>
+              </span>
+              <span class="switch">
+                <input id="includePending" type="checkbox" checked />
+                <span class="switch-track" aria-hidden="true"></span>
+              </span>
+            </label>
+          </form>
+        </section>
+
+        <section class="kpi-grid" aria-label="Indicadores principales">
+          <article class="kpi-card kpi-card-primary">
+            <div class="kpi-label-row">
+              <span>Saldo disponible</span>
+              <span class="kpi-icon" aria-hidden="true">$</span>
+            </div>
+            <strong class="kpi-value" id="availableBalance">—</strong>
+            <small>En 3 cuentas bancarias</small>
+          </article>
+
+          <article class="kpi-card">
+            <div class="kpi-label-row">
+              <span>Cobros del periodo</span>
+              <span class="kpi-trend kpi-trend-in" aria-hidden="true">↗</span>
+            </div>
+            <strong class="kpi-value" id="periodInflows">—</strong>
+            <small id="inflowCount">—</small>
+          </article>
+
+          <article class="kpi-card">
+            <div class="kpi-label-row">
+              <span>Pagos del periodo</span>
+              <span class="kpi-trend kpi-trend-out" aria-hidden="true">↘</span>
+            </div>
+            <strong class="kpi-value" id="periodOutflows">—</strong>
+            <small id="outflowCount">—</small>
+          </article>
+
+          <article class="kpi-card">
+            <div class="kpi-label-row">
+              <span>Saldo proyectado</span>
+              <span class="kpi-icon kpi-icon-soft" aria-hidden="true">≈</span>
+            </div>
+            <strong class="kpi-value" id="projectedBalance">—</strong>
+            <small id="projectedDelta">—</small>
+          </article>
+        </section>
+
+        <section class="dashboard-grid">
+          <article class="panel position-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-kicker">POSICIÓN DIARIA</p>
+                <h2>Disponibilidad por cuenta</h2>
+              </div>
+              <span class="panel-note">MXN</span>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Institución</th>
+                    <th>Cuenta</th>
+                    <th class="align-right">Saldo</th>
+                    <th>Uso</th>
+                  </tr>
+                </thead>
+                <tbody id="accountsTableBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="panel insight-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-kicker">LECTURA RÁPIDA</p>
+                <h2>Señales del escenario</h2>
+              </div>
+            </div>
+
+            <div class="insight-list">
+              <div class="insight-item">
+                <span class="insight-marker insight-marker-blue" aria-hidden="true"></span>
+                <div>
+                  <small>Saldo mínimo proyectado</small>
+                  <strong id="minimumBalance">—</strong>
+                  <p id="minimumBalanceDate">—</p>
+                </div>
+              </div>
+
+              <div class="insight-item">
+                <span class="insight-marker insight-marker-coral" aria-hidden="true"></span>
+                <div>
+                  <small>Mayor salida del periodo</small>
+                  <strong id="largestOutflow">—</strong>
+                  <p id="largestOutflowLabel">—</p>
+                </div>
+              </div>
+
+              <div class="insight-item">
+                <span class="insight-marker insight-marker-gold" aria-hidden="true"></span>
+                <div>
+                  <small>Movimientos por confirmar</small>
+                  <strong id="pendingCount">—</strong>
+                  <p id="pendingAmount">—</p>
+                </div>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="panel forecast-panel" aria-labelledby="forecastTitle">
+          <div class="panel-heading panel-heading-wrap">
+            <div>
+              <p class="section-kicker">FLUJO PROYECTADO</p>
+              <h2 id="forecastTitle">Evolución del saldo</h2>
+            </div>
+            <div class="legend" aria-label="Leyenda de la gráfica">
+              <span><i class="legend-line"></i> Saldo proyectado</span>
+              <span><i class="legend-dot legend-dot-in"></i> Cobro</span>
+              <span><i class="legend-dot legend-dot-out"></i> Pago</span>
+            </div>
+          </div>
+
+          <div class="chart-wrap">
+            <svg
+              id="forecastChart"
+              class="forecast-chart"
+              role="img"
+              aria-label="Gráfica del saldo proyectado durante el periodo seleccionado"
+              viewBox="0 0 1000 340"
+              preserveAspectRatio="none"
+            ></svg>
+          </div>
+        </section>
+
+        <section class="panel movements-panel" aria-labelledby="movementsTitle">
+          <div class="panel-heading panel-heading-wrap">
+            <div>
+              <p class="section-kicker">AGENDA DE EFECTIVO</p>
+              <h2 id="movementsTitle">Próximos movimientos</h2>
+            </div>
+            <span class="movement-summary" id="movementSummary">—</span>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Concepto</th>
+                  <th>Tipo</th>
+                  <th>Estatus</th>
+                  <th class="align-right">Importe</th>
+                </tr>
+              </thead>
+              <tbody id="movementsTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <p>
+          Proyecto demostrativo de Iván Mota · HTML, CSS y JavaScript · Ningún dato pertenece a una empresa real.
+        </p>
+      </footer>
+    </div>
+
+    <div class="sr-only" id="liveRegion" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
