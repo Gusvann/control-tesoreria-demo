@@ -76,3 +76,14 @@ También puede publicarse mediante GitHub Pages.
 
 **Iván Mota Cruz**  
 Tesorería · Gestión financiera · Automatización
+
+
+## Escala de la gráfica
+
+La escala vertical se construye a partir del **saldo mínimo y máximo acumulado de la proyección**, no del tamaño aislado de cada cobro o pago.
+
+- **Automática:** agrega un margen visual aproximado de 12 %, redondea límites e intervalos a cifras financieras legibles y muestra el cero únicamente cuando aporta contexto de riesgo o los saldos son pequeños.
+- **Desde cero:** mantiene el cero como referencia para dimensionar la magnitud total de la caja.
+- Utiliza entre cuatro y cinco marcas principales cuando el rango lo permite.
+- No fuerza simetría entre valores positivos y negativos.
+- Cuando el escenario personal no contiene saldos ni movimientos, muestra un estado vacío en lugar de una escala arbitraria.

@@ -1215,3 +1215,96 @@ footer {
     transition: none !important;
   }
 }
+
+
+/* Controles y lectura de la escala del forecast */
+.forecast-heading-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.scale-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.scale-control-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.scale-buttons {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--canvas);
+}
+
+.scale-button {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.scale-button:hover {
+  color: var(--ink);
+}
+
+.scale-button.is-active {
+  background: white;
+  color: var(--blue-deep);
+  box-shadow: 0 2px 8px rgba(20, 35, 59, 0.08);
+}
+
+.chart-zero-line {
+  stroke: #b6c1cf;
+  stroke-width: 1.7;
+}
+
+.chart-empty-title {
+  fill: var(--ink);
+  font-family: "Sora", sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.chart-empty-copy {
+  fill: var(--muted);
+  font-family: "Public Sans", sans-serif;
+  font-size: 14px;
+}
+
+@media (max-width: 760px) {
+  .forecast-heading-actions {
+    width: 100%;
+    align-items: flex-start;
+  }
+
+  .scale-control {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .legend {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 460px) {
+  .scale-control {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

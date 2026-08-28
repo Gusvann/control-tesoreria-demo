@@ -309,10 +309,31 @@
                 <p class="section-kicker">FLUJO PROYECTADO</p>
                 <h2 id="forecastTitle">Evolución del saldo</h2>
               </div>
-              <div class="legend" aria-label="Leyenda de la gráfica">
-                <span><i class="legend-line"></i> Saldo proyectado</span>
-                <span><i class="legend-dot legend-dot-in"></i> Cobro</span>
-                <span><i class="legend-dot legend-dot-out"></i> Pago</span>
+              <div class="forecast-heading-actions">
+                <div class="scale-control" role="group" aria-label="Escala vertical de la gráfica">
+                  <span class="scale-control-label">Escala</span>
+                  <div class="scale-buttons">
+                    <button
+                      class="scale-button is-active"
+                      id="chartScaleAuto"
+                      type="button"
+                      aria-pressed="true"
+                      title="Ajusta el eje al saldo mínimo y máximo proyectado"
+                    >Automática</button>
+                    <button
+                      class="scale-button"
+                      id="chartScaleZero"
+                      type="button"
+                      aria-pressed="false"
+                      title="Muestra la magnitud completa tomando el cero como referencia"
+                    >Desde cero</button>
+                  </div>
+                </div>
+                <div class="legend" aria-label="Leyenda de la gráfica">
+                  <span><i class="legend-line"></i> Saldo proyectado</span>
+                  <span><i class="legend-dot legend-dot-in"></i> Cobro</span>
+                  <span><i class="legend-dot legend-dot-out"></i> Pago</span>
+                </div>
               </div>
             </div>
 

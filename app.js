@@ -31,6 +31,7 @@ const state = {
   mode: "demo",
   horizon: 14,
   includePending: true,
+  chartScaleMode: "auto",
   custom: loadCustomState(),
 };
 
@@ -80,6 +81,8 @@ const els = {
   largestOutflowLabel: document.querySelector("#largestOutflowLabel"),
   pendingCount: document.querySelector("#pendingCount"),
   pendingAmount: document.querySelector("#pendingAmount"),
+  chartScaleAuto: document.querySelector("#chartScaleAuto"),
+  chartScaleZero: document.querySelector("#chartScaleZero"),
   forecastChart: document.querySelector("#forecastChart"),
   liveRegion: document.querySelector("#liveRegion"),
 };
@@ -550,7 +553,7 @@ function renderMovements(filteredMovements) {
 
 function niceCeiling(value) {
   if (!Number.isFinite(value) || value <= 0) {
-    return 5000;
+    return 1;
   }
 
   const exponent = Math.floor(Math.log10(value));
@@ -562,6 +565,8 @@ function niceCeiling(value) {
     niceFraction = 1;
   } else if (fraction <= 2) {
     niceFraction = 2;
+  } else if (fraction <= 2.5) {
+    niceFraction = 2.5;
   } else if (fraction <= 5) {
     niceFraction = 5;
   } else {
@@ -571,77 +576,211 @@ function niceCeiling(value) {
   return niceFraction * magnitude;
 }
 
-function getMovementScaleStep(maxMovement) {
-  if (maxMovement <= 1000) {
-    return 5000;
-  }
-  if (maxMovement <= 5000) {
-    return 10000;
-  }
-  if (maxMovement <= 10000) {
-    return 20000;
-  }
-  if (maxMovement <= 20000) {
-    return 50000;
-  }
-  if (maxMovement <= 50000) {
-    return 100000;
+function nextNiceStep(step) {
+  return niceCeiling(step * 1.0000001);
+}
+
+function roundTickValue(value, step) {
+  const exponent = Math.floor(Math.log10(Math.abs(step) || 1));
+  const precision = Math.max(0, Math.min(10, -exponent + 4));
+  const rounded = Number(value.toFixed(precision));
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+function buildTickValues(yMin, yMax, step) {
+  const intervalCount = Math.max(1, Math.round((yMax - yMin) / step));
+  return Array.from({ length: intervalCount + 1 }, (_, index) =>
+    roundTickValue(yMin + index * step, step),
+  );
+}
+
+function shouldIncludeZero(rawMin, rawMax, rawRange) {
+  if (state.chartScaleMode === "zero") {
+    return true;
   }
 
-  return niceCeiling(maxMovement * 1.5);
+  if (rawMin <= 0 || rawMax <= 0) {
+    return true;
+  }
+
+  const maxAbsoluteBalance = Math.max(Math.abs(rawMin), Math.abs(rawMax));
+  if (maxAbsoluteBalance <= 10000) {
+    return true;
+  }
+
+  const distanceToZero = Math.min(Math.abs(rawMin), Math.abs(rawMax));
+  return distanceToZero <= Math.max(rawRange * 0.25, 1000);
 }
 
 function getChartScale(series) {
-  const balances = series.map((point) => point.balance);
-  const movementAmounts = series.flatMap((point) =>
-    point.movements.map((movement) => Math.abs(movement.amount)),
-  );
+  const balances = series.map((point) => point.balance).filter(Number.isFinite);
+  const rawMin = Math.min(...balances);
+  const rawMax = Math.max(...balances);
+  const rawRange = rawMax - rawMin;
+  const includeZero = shouldIncludeZero(rawMin, rawMax, rawRange);
 
-  const minBalance = Math.min(...balances, 0);
-  const maxBalance = Math.max(...balances, 0);
-  const maxAbsoluteBalance = Math.max(Math.abs(minBalance), Math.abs(maxBalance));
-  const maxMovement = Math.max(...movementAmounts, 0);
+  let paddedMin;
+  let paddedMax;
 
-  const movementStep = getMovementScaleStep(maxMovement);
-  const balanceStep = maxAbsoluteBalance > 0 ? niceCeiling(maxAbsoluteBalance / 1.8) : 5000;
-  const innerStep = Math.max(5000, movementStep, balanceStep);
-  const outerBound = innerStep * 2;
+  if (rawRange === 0) {
+    const reference = Math.max(Math.abs(rawMin), 1);
+    const halfSpan = Math.max(reference * 0.06, reference <= 10000 ? 500 : 1);
+    paddedMin = rawMin - halfSpan;
+    paddedMax = rawMax + halfSpan;
+  } else {
+    const padding = rawRange * 0.12;
+    paddedMin = rawMin - padding;
+    paddedMax = rawMax + padding;
+  }
 
-  if (minBalance < 0 && maxBalance > 0) {
+  if (includeZero) {
+    paddedMin = Math.min(paddedMin, 0);
+    paddedMax = Math.max(paddedMax, 0);
+  }
+
+  const maxAbsoluteBalance = Math.max(Math.abs(rawMin), Math.abs(rawMax));
+
+  if (includeZero && maxAbsoluteBalance <= 10000) {
+    const step = 5000;
+    let yMin = Math.floor(paddedMin / step) * step;
+    let yMax = Math.ceil(paddedMax / step) * step;
+
+    if (rawMin >= 0) {
+      yMin = 0;
+      yMax = Math.max(10000, yMax);
+    } else if (rawMax <= 0) {
+      yMax = 0;
+      yMin = Math.min(-10000, yMin);
+    } else {
+      if (yMin === 0) yMin = -step;
+      if (yMax === 0) yMax = step;
+    }
+
+    let tickValues = buildTickValues(yMin, yMax, step);
+    while (tickValues.length < 4) {
+      if (Math.abs(rawMin) > Math.abs(rawMax)) {
+        yMin -= step;
+      } else {
+        yMax += step;
+      }
+      tickValues = buildTickValues(yMin, yMax, step);
+    }
+
+    return { yMin, yMax, step, tickValues, includesZero: true };
+  }
+
+  const desiredIntervals = 4;
+  let step = niceCeiling((paddedMax - paddedMin) / desiredIntervals);
+
+  function calculateBounds(currentStep) {
+    let yMin = Math.floor(paddedMin / currentStep) * currentStep;
+    let yMax = Math.ceil(paddedMax / currentStep) * currentStep;
+
+    if (includeZero && rawMin >= 0) {
+      yMin = 0;
+    }
+    if (includeZero && rawMax <= 0) {
+      yMax = 0;
+    }
+    if (yMin === yMax) {
+      yMin -= currentStep;
+      yMax += currentStep;
+    }
+
     return {
-      yMin: -outerBound,
-      yMax: outerBound,
-      tickValues: [outerBound, innerStep, 0, -innerStep, -outerBound],
+      yMin: roundTickValue(yMin, currentStep),
+      yMax: roundTickValue(yMax, currentStep),
     };
   }
 
-  if (minBalance < 0) {
-    return {
-      yMin: -outerBound,
-      yMax: 0,
-      tickValues: [0, -innerStep, -outerBound],
-    };
+  let { yMin, yMax } = calculateBounds(step);
+  let tickValues = buildTickValues(yMin, yMax, step);
+
+  for (let guard = 0; tickValues.length > 5 && guard < 12; guard += 1) {
+    step = nextNiceStep(step);
+    ({ yMin, yMax } = calculateBounds(step));
+    tickValues = buildTickValues(yMin, yMax, step);
   }
 
-  return {
-    yMin: 0,
-    yMax: outerBound,
-    tickValues: [outerBound, innerStep, 0],
-  };
+  for (let guard = 0; tickValues.length < 4 && guard < 4; guard += 1) {
+    if (includeZero && yMin === 0 && rawMin >= 0) {
+      yMax += step;
+    } else if (includeZero && yMax === 0 && rawMax <= 0) {
+      yMin -= step;
+    } else {
+      const lowerSpace = rawMin - yMin;
+      const upperSpace = yMax - rawMax;
+      if (lowerSpace <= upperSpace) {
+        yMin -= step;
+      } else {
+        yMax += step;
+      }
+    }
+    yMin = roundTickValue(yMin, step);
+    yMax = roundTickValue(yMax, step);
+    tickValues = buildTickValues(yMin, yMax, step);
+  }
+
+  return { yMin, yMax, step, tickValues, includesZero: yMin <= 0 && yMax >= 0 };
 }
 
 function formatChartAxisValue(value) {
-  if (Math.abs(value) >= 1000000) {
-    return compactCurrency.format(value);
+  const normalized = Math.abs(value) < 0.000001 ? 0 : value;
+
+  if (Math.abs(normalized) >= 1000000) {
+    return compactCurrency.format(normalized);
   }
 
-  return currency.format(value);
+  return new Intl.NumberFormat("es-MX", {
+    style: "currency",
+    currency: "MXN",
+    maximumFractionDigits: Math.abs(normalized) < 100 ? 2 : 0,
+  }).format(normalized);
 }
 
-function renderChart(series) {
+function updateChartScaleControls() {
+  const automatic = state.chartScaleMode === "auto";
+  els.chartScaleAuto.classList.toggle("is-active", automatic);
+  els.chartScaleZero.classList.toggle("is-active", !automatic);
+  els.chartScaleAuto.setAttribute("aria-pressed", String(automatic));
+  els.chartScaleZero.setAttribute("aria-pressed", String(!automatic));
+}
+
+function setChartScaleMode(mode) {
+  state.chartScaleMode = mode === "zero" ? "zero" : "auto";
+  updateChartScaleControls();
+  renderDashboard();
+}
+
+function renderChart(series, options = {}) {
+  updateChartScaleControls();
+
+  if (!options.hasData) {
+    els.forecastChart.setAttribute(
+      "aria-label",
+      "La proyección todavía no contiene saldos ni movimientos.",
+    );
+    els.forecastChart.innerHTML = `
+      <text class="chart-empty-title" x="500" y="148" text-anchor="middle">
+        Agrega el saldo de al menos un banco
+      </text>
+      <text class="chart-empty-copy" x="500" y="180" text-anchor="middle">
+        o registra un cobro o pago para generar la proyección.
+      </text>
+    `;
+    return;
+  }
+
+  els.forecastChart.setAttribute(
+    "aria-label",
+    `Gráfica del saldo proyectado con escala ${
+      state.chartScaleMode === "auto" ? "automática" : "desde cero"
+    }`,
+  );
+
   const width = 1000;
   const height = 340;
-  const margin = { top: 24, right: 24, bottom: 48, left: 92 };
+  const margin = { top: 24, right: 24, bottom: 48, left: 98 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
   const { yMin, yMax, tickValues } = getChartScale(series);
@@ -653,14 +792,16 @@ function renderChart(series) {
     .map((point, index) => `${index === 0 ? "M" : "L"} ${x(point.day).toFixed(2)} ${y(point.balance).toFixed(2)}`)
     .join(" ");
 
-  const zeroLineY = y(0);
-  const areaPath = `${linePath} L ${x(state.horizon)} ${zeroLineY} L ${x(0)} ${zeroLineY} Z`;
+  const areaBaselineValue = yMin <= 0 && yMax >= 0 ? 0 : yMin;
+  const areaBaselineY = y(areaBaselineValue);
+  const areaPath = `${linePath} L ${x(state.horizon)} ${areaBaselineY} L ${x(0)} ${areaBaselineY} Z`;
 
   const gridLines = tickValues
     .map((value) => {
       const yPosition = y(value);
+      const zeroClass = value === 0 ? " chart-zero-line" : "";
       return `
-        <line class="chart-grid-line" x1="${margin.left}" y1="${yPosition}" x2="${width - margin.right}" y2="${yPosition}" />
+        <line class="chart-grid-line${zeroClass}" x1="${margin.left}" y1="${yPosition}" x2="${width - margin.right}" y2="${yPosition}" />
         <text class="chart-axis-label" x="${margin.left - 12}" y="${yPosition + 4}" text-anchor="end">${formatChartAxisValue(value)}</text>
       `;
     })
@@ -729,7 +870,8 @@ function renderDashboard() {
   renderKpis(accounts, filteredMovements, totals, forecastSeries);
   renderInsights(filteredMovements, forecastSeries);
   renderMovements(filteredMovements);
-  renderChart(forecastSeries);
+  const hasChartData = startingBalance !== 0 || filteredMovements.length > 0;
+  renderChart(forecastSeries, { hasData: hasChartData });
 
   els.liveRegion.textContent = `Escenario actualizado a ${state.horizon} días, con movimientos por confirmar ${
     state.includePending ? "incluidos" : "excluidos"
@@ -815,6 +957,9 @@ function bindEvents() {
     state.includePending = event.target.checked;
     renderDashboard();
   });
+
+  els.chartScaleAuto.addEventListener("click", () => setChartScaleMode("auto"));
+  els.chartScaleZero.addEventListener("click", () => setChartScaleMode("zero"));
 
   els.bankCount.addEventListener("change", (event) => syncBankCount(event.target.value));
 
