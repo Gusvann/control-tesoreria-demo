@@ -5,6 +5,7 @@ on:
     branches:
       - main
     paths:
+      - scripts/refine_small_scale.py
       - .github/workflows/refine-small-chart-scale.yml
 
 permissions:
@@ -16,39 +17,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Ajustar tramo pequeño
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("app.js")
-          text = path.read_text(encoding="utf-8")
-          old = '''    let tickValues = buildTickValues(yMin, yMax, step);
-    while (tickValues.length < 4) {
-      if (Math.abs(rawMin) > Math.abs(rawMax)) {
-        yMin -= step;
-      } else {
-        yMax += step;
-      }
-      tickValues = buildTickValues(yMin, yMax, step);
-    }
-
-    return { yMin, yMax, step, tickValues, includesZero: true };'''
-          new = '''    const tickValues = buildTickValues(yMin, yMax, step);
-    return { yMin, yMax, step, tickValues, includesZero: true };'''
-          if old not in text:
-              raise SystemExit("No se encontró el bloque de escala pequeña esperado")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
-          PY
+      - name: Aplicar parche
+        run: python3 scripts/refine_small_scale.py
 
       - name: Validar JavaScript
         run: node --check app.js
 
       - name: Publicar cambio
         run: |
+          rm scripts/refine_small_scale.py
           rm .github/workflows/refine-small-chart-scale.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app.js .github/workflows/refine-small-chart-scale.yml
+          git add app.js scripts/refine_small_scale.py .github/workflows/refine-small-chart-scale.yml
           git commit -m "Refina escalas pequeñas de la gráfica"
           git push
