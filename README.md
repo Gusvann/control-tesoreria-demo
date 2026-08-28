@@ -1,34 +1,48 @@
-# Control de Tesorería — Demo
+# Control de Tesorería — Demo y proyección interactiva
 
-Dashboard demostrativo para consultar la posición diaria de caja, proyectar entradas y salidas y revisar próximos movimientos desde una sola pantalla.
+Dashboard demostrativo para consultar la posición diaria de caja y crear una proyección propia desde cero.
 
-> **Todos los datos, instituciones, cuentas, importes y conceptos son completamente simulados.** Este repositorio no contiene información de empleadores, clientes ni operaciones reales.
+> La vista de ejemplo utiliza datos completamente simulados. La información capturada por cada visitante se guarda únicamente en su navegador mediante `localStorage`; no se envía a servidores, bases de datos, Google Sheets ni APIs.
 
-## Problema que resuelve
+## Flujo de uso
 
-En muchas operaciones de tesorería, la información se encuentra distribuida entre portales bancarios, hojas de cálculo y reportes internos. Esta demo muestra una forma sencilla de reunir lo esencial para responder cuatro preguntas:
+### 1. Ver ejemplo
 
-1. ¿Cuánto efectivo está disponible hoy?
-2. ¿Qué cobros y pagos se esperan dentro del periodo?
-3. ¿Cuál sería el saldo al final del escenario?
-4. ¿En qué fecha aparece el punto de menor liquidez?
+La página abre con un escenario demostrativo para explicar cómo leer:
 
-## Funcionalidades
+- saldo disponible;
+- cobros y pagos del periodo;
+- saldo proyectado;
+- saldo mínimo;
+- movimientos confirmados y por confirmar;
+- evolución de la liquidez a 7, 14 o 30 días.
 
-- Posición bancaria consolidada en MXN.
-- Indicadores de saldo disponible, cobros, pagos y saldo proyectado.
-- Horizonte seleccionable de 7, 14 o 30 días.
-- Escenario con o sin movimientos por confirmar.
-- Gráfica de evolución del saldo.
-- Identificación del saldo mínimo y de la mayor salida.
-- Agenda de próximos movimientos con estatus.
-- Diseño adaptable para escritorio y dispositivos móviles.
+### 2. Crear mi proyección
+
+El CTA **Crear mi proyección** cambia a un escenario personal que comienza en cero. La persona puede:
+
+- indicar el número de bancos;
+- nombrar cada banco;
+- capturar el saldo inicial por banco;
+- registrar cobros y pagos;
+- asignar fecha, concepto, importe y estatus;
+- incluir o excluir movimientos por confirmar;
+- revisar el forecast desde la fecha actual;
+- borrar la proyección y comenzar de nuevo.
+
+## Criterios del proyecto
+
+- La fecha inicial siempre corresponde al día en que se abre la aplicación.
+- Los movimientos no pueden registrarse con fecha anterior al día actual.
+- El saldo inicial total se calcula a partir de la suma de los saldos bancarios.
+- La proyección es completamente client-side.
+- No requiere usuarios, contraseñas ni instalación.
 
 ## Diseño
 
-- **Sora:** títulos, encabezados, cifras e indicadores.
-- **Public Sans:** textos, tablas, etiquetas y controles.
-- Titular dividido: la primera frase plantea la idea en tinta oscura y la segunda enfatiza el resultado en azul.
+- **Sora:** títulos, encabezados, cifras, indicadores y métricas.
+- **Public Sans:** textos, tablas, etiquetas, formularios, botones y navegación.
+- **Titular dividido:** primera frase en tinta oscura y segunda frase en azul.
 
 ## Tecnologías
 
@@ -36,16 +50,17 @@ En muchas operaciones de tesorería, la información se encuentra distribuida en
 - CSS3
 - JavaScript sin frameworks
 - SVG generado con JavaScript para la gráfica
+- `localStorage` para persistencia local
 
-## Cómo ejecutarlo
+## Ejecución
 
-No requiere instalación ni proceso de compilación.
+No requiere compilación.
 
 1. Clona o descarga el repositorio.
 2. Abre la carpeta en tu editor.
-3. Ejecuta `index.html` con un servidor local, por ejemplo **Live Server** en Visual Studio Code.
+3. Ejecuta `index.html` con un servidor local, por ejemplo **Live Server**.
 
-También puede publicarse como sitio estático mediante GitHub Pages.
+También puede publicarse mediante GitHub Pages.
 
 ## Estructura
 
@@ -56,10 +71,6 @@ También puede publicarse como sitio estático mediante GitHub Pages.
 ├── app.js
 └── README.md
 ```
-
-## Criterio financiero
-
-La aplicación no busca reemplazar un TMS o ERP. Su propósito es demostrar cómo una vista mínima puede ordenar información de tesorería y facilitar decisiones operativas sobre liquidez, pagos y cobranza.
 
 ## Autor
 
