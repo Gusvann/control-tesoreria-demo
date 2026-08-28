@@ -548,20 +548,103 @@ function renderMovements(filteredMovements) {
   }`;
 }
 
+function niceCeiling(value) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 5000;
+  }
+
+  const exponent = Math.floor(Math.log10(value));
+  const magnitude = 10 ** exponent;
+  const fraction = value / magnitude;
+  let niceFraction;
+
+  if (fraction <= 1) {
+    niceFraction = 1;
+  } else if (fraction <= 2) {
+    niceFraction = 2;
+  } else if (fraction <= 5) {
+    niceFraction = 5;
+  } else {
+    niceFraction = 10;
+  }
+
+  return niceFraction * magnitude;
+}
+
+function getMovementScaleStep(maxMovement) {
+  if (maxMovement <= 1000) {
+    return 5000;
+  }
+  if (maxMovement <= 5000) {
+    return 10000;
+  }
+  if (maxMovement <= 10000) {
+    return 20000;
+  }
+  if (maxMovement <= 20000) {
+    return 50000;
+  }
+  if (maxMovement <= 50000) {
+    return 100000;
+  }
+
+  return niceCeiling(maxMovement * 1.5);
+}
+
+function getChartScale(series) {
+  const balances = series.map((point) => point.balance);
+  const movementAmounts = series.flatMap((point) =>
+    point.movements.map((movement) => Math.abs(movement.amount)),
+  );
+
+  const minBalance = Math.min(...balances, 0);
+  const maxBalance = Math.max(...balances, 0);
+  const maxAbsoluteBalance = Math.max(Math.abs(minBalance), Math.abs(maxBalance));
+  const maxMovement = Math.max(...movementAmounts, 0);
+
+  const movementStep = getMovementScaleStep(maxMovement);
+  const balanceStep = maxAbsoluteBalance > 0 ? niceCeiling(maxAbsoluteBalance / 1.8) : 5000;
+  const innerStep = Math.max(5000, movementStep, balanceStep);
+  const outerBound = innerStep * 2;
+
+  if (minBalance < 0 && maxBalance > 0) {
+    return {
+      yMin: -outerBound,
+      yMax: outerBound,
+      tickValues: [outerBound, innerStep, 0, -innerStep, -outerBound],
+    };
+  }
+
+  if (minBalance < 0) {
+    return {
+      yMin: -outerBound,
+      yMax: 0,
+      tickValues: [0, -innerStep, -outerBound],
+    };
+  }
+
+  return {
+    yMin: 0,
+    yMax: outerBound,
+    tickValues: [outerBound, innerStep, 0],
+  };
+}
+
+function formatChartAxisValue(value) {
+  if (Math.abs(value) >= 1000000) {
+    return compactCurrency.format(value);
+  }
+
+  return currency.format(value);
+}
+
 function renderChart(series) {
   const width = 1000;
   const height = 340;
-  const margin = { top: 24, right: 24, bottom: 48, left: 82 };
+  const margin = { top: 24, right: 24, bottom: 48, left: 92 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
-
-  const balances = series.map((point) => point.balance);
-  const minBalance = Math.min(...balances, 0);
-  const maxBalance = Math.max(...balances, 0);
-  const naturalRange = maxBalance - minBalance;
-  const padding = Math.max(naturalRange * 0.18, naturalRange === 0 ? 1000 : 250000);
-  const yMin = minBalance - padding;
-  const yMax = maxBalance + padding;
+  const { yMin, yMax, tickValues } = getChartScale(series);
 
   const x = (day) => margin.left + (day / state.horizon) * plotWidth;
   const y = (balance) => margin.top + ((yMax - balance) / (yMax - yMin || 1)) * plotHeight;
@@ -573,16 +656,15 @@ function renderChart(series) {
   const zeroLineY = y(0);
   const areaPath = `${linePath} L ${x(state.horizon)} ${zeroLineY} L ${x(0)} ${zeroLineY} Z`;
 
-  const yTicks = 4;
-  const gridLines = Array.from({ length: yTicks + 1 }, (_, index) => {
-    const ratio = index / yTicks;
-    const value = yMax - ratio * (yMax - yMin);
-    const yPosition = margin.top + ratio * plotHeight;
-    return `
-      <line class="chart-grid-line" x1="${margin.left}" y1="${yPosition}" x2="${width - margin.right}" y2="${yPosition}" />
-      <text class="chart-axis-label" x="${margin.left - 12}" y="${yPosition + 4}" text-anchor="end">${compactCurrency.format(value)}</text>
-    `;
-  }).join("");
+  const gridLines = tickValues
+    .map((value) => {
+      const yPosition = y(value);
+      return `
+        <line class="chart-grid-line" x1="${margin.left}" y1="${yPosition}" x2="${width - margin.right}" y2="${yPosition}" />
+        <text class="chart-axis-label" x="${margin.left - 12}" y="${yPosition + 4}" text-anchor="end">${formatChartAxisValue(value)}</text>
+      `;
+    })
+    .join("");
 
   const preferredLabels = state.horizon === 7 ? 7 : state.horizon === 14 ? 7 : 6;
   const xTickStep = Math.max(1, Math.round(state.horizon / preferredLabels));
