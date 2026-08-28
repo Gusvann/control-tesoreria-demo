@@ -656,16 +656,7 @@ function getChartScale(series) {
       if (yMax === 0) yMax = step;
     }
 
-    let tickValues = buildTickValues(yMin, yMax, step);
-    while (tickValues.length < 4) {
-      if (Math.abs(rawMin) > Math.abs(rawMax)) {
-        yMin -= step;
-      } else {
-        yMax += step;
-      }
-      tickValues = buildTickValues(yMin, yMax, step);
-    }
-
+    const tickValues = buildTickValues(yMin, yMax, step);
     return { yMin, yMax, step, tickValues, includesZero: true };
   }
 
