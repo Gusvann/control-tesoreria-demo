@@ -168,8 +168,10 @@
                   <input id="movementAmount" type="number" min="0.01" step="0.01" placeholder="0.00" required />
                 </div>
 
-                <button class="button button-primary movement-submit" type="submit">Agregar movimiento</button>
+                <button class="button button-primary movement-submit" id="addMovementButton" type="submit">Agregar movimiento</button>
               </form>
+
+              <p class="capture-help">Enter conserva la captura. Usa <strong>Agregar movimiento</strong> para registrarla.</p>
 
               <div class="capture-feedback" id="captureFeedback" role="status" aria-live="polite"></div>
 
@@ -354,20 +356,77 @@
               <span class="movement-summary" id="movementSummary">0 movimientos</span>
             </div>
 
+            <div class="movement-filters" role="group" aria-label="Filtros de movimientos">
+              <div class="field-group movement-search-field">
+                <label for="movementSearch">Buscar concepto</label>
+                <input id="movementSearch" type="search" placeholder="Ej. Nómina, cliente o renta" maxlength="70" />
+              </div>
+              <div class="field-group">
+                <label for="movementScopeFilter">Mostrar</label>
+                <select id="movementScopeFilter">
+                  <option value="projection">Proyección actual</option>
+                  <option value="all">Todos los movimientos</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="movementTypeFilter">Tipo</label>
+                <select id="movementTypeFilter">
+                  <option value="all">Cobros y pagos</option>
+                  <option value="inflow">Cobros</option>
+                  <option value="outflow">Pagos</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="movementStatusFilter">Estatus</label>
+                <select id="movementStatusFilter">
+                  <option value="all">Todos los estatus</option>
+                  <option value="confirmed">Confirmado</option>
+                  <option value="pending">Por confirmar</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="movementFromFilter">Desde</label>
+                <input id="movementFromFilter" type="date" />
+              </div>
+              <div class="field-group">
+                <label for="movementToFilter">Hasta</label>
+                <input id="movementToFilter" type="date" />
+              </div>
+              <button class="button button-secondary movement-filter-clear" id="clearMovementFilters" type="button">Limpiar filtros</button>
+            </div>
+
+            <p class="movement-filter-feedback" id="movementFilterFeedback" role="status" aria-live="polite"></p>
+            <p class="movement-table-hint" id="movementTableHint">
+              Los filtros solo cambian esta tabla. Para editar un movimiento, haz doble clic en su fila o usa Editar.
+            </p>
+
+            <div class="movement-selection-toolbar">
+              <span id="selectionSummary" role="status" aria-live="polite">0 seleccionados</span>
+              <div class="movement-selection-actions">
+                <button class="button button-primary" id="editSelectedMovements" type="button" disabled>Editar seleccionados</button>
+                <button class="button button-secondary" id="clearMovementSelection" type="button" disabled>Quitar selección</button>
+              </div>
+            </div>
+
             <div class="table-wrap">
-              <table>
+              <table class="movements-table" aria-describedby="movementTableHint">
                 <thead>
                   <tr>
-                    <th>Fecha</th>
-                    <th>Concepto</th>
-                    <th>Tipo</th>
-                    <th>Estatus</th>
-                    <th class="align-right">Importe</th>
+                    <th scope="col" class="movement-selection-cell">
+                      <input class="movement-checkbox" id="selectAllMovements" type="checkbox" aria-label="Seleccionar todos los movimientos visibles" />
+                    </th>
+                    <th scope="col">Fecha</th>
+                    <th scope="col">Concepto</th>
+                    <th scope="col">Tipo</th>
+                    <th scope="col">Estatus</th>
+                    <th scope="col" class="align-right">Importe</th>
+                    <th scope="col"><span class="sr-only">Acciones</span></th>
                   </tr>
                 </thead>
                 <tbody id="movementsTableBody"></tbody>
               </table>
             </div>
+            <p class="movement-feedback" id="movementFeedback" role="status" aria-live="polite"></p>
           </section>
         </section>
       </main>
@@ -379,7 +438,46 @@
       </footer>
     </div>
 
+    <dialog class="movement-edit-dialog" id="movementEditDialog" aria-labelledby="movementEditTitle" aria-describedby="movementEditDescription">
+      <form id="movementEditForm" novalidate>
+        <p class="section-kicker">ACTUALIZAR MOVIMIENTOS</p>
+        <h2 id="movementEditTitle">Editar movimiento</h2>
+        <p class="movement-edit-description" id="movementEditDescription"></p>
+        <p class="movement-edit-help">Marca los campos que quieres cambiar. Los demás conservarán su valor.</p>
+
+        <div class="movement-edit-fields">
+          <div class="movement-edit-field">
+            <label class="movement-edit-toggle" for="editDateEnabled">
+              <input class="movement-checkbox" id="editDateEnabled" type="checkbox" />
+              <span>Cambiar fecha</span>
+            </label>
+            <label class="sr-only" for="editMovementDate">Nueva fecha</label>
+            <input id="editMovementDate" type="date" disabled />
+          </div>
+          <div class="movement-edit-field">
+            <label class="movement-edit-toggle" for="editStatusEnabled">
+              <input class="movement-checkbox" id="editStatusEnabled" type="checkbox" />
+              <span>Cambiar estatus</span>
+            </label>
+            <label class="sr-only" for="editMovementStatus">Nuevo estatus</label>
+            <select id="editMovementStatus" disabled>
+              <option value="confirmed">Confirmado</option>
+              <option value="pending">Por confirmar</option>
+            </select>
+          </div>
+        </div>
+
+        <p class="movement-edit-preview" id="editMovementPreview" aria-live="polite"></p>
+        <p class="movement-edit-error" id="editMovementError" role="alert"></p>
+        <div class="movement-edit-actions">
+          <button class="button button-secondary" id="cancelMovementEdit" type="button">Cancelar</button>
+          <button class="button button-primary" id="saveMovementEdit" type="submit">Guardar cambios</button>
+        </div>
+      </form>
+    </dialog>
+
     <div class="sr-only" id="liveRegion" aria-live="polite"></div>
     <script src="app.js"></script>
   </body>
 </html>
+

@@ -33,6 +33,10 @@ const state = {
   includePending: true,
   chartScaleMode: "auto",
   custom: loadCustomState(),
+  demoEdits: new Map(),
+  movementFilters: createMovementFilters(),
+  selectedMovementIds: new Set(),
+  movementEdit: null,
 };
 
 const els = {
@@ -75,6 +79,33 @@ const els = {
   accountsTableBody: document.querySelector("#accountsTableBody"),
   movementsTableBody: document.querySelector("#movementsTableBody"),
   movementSummary: document.querySelector("#movementSummary"),
+  movementSearch: document.querySelector("#movementSearch"),
+  movementTypeFilter: document.querySelector("#movementTypeFilter"),
+  movementStatusFilter: document.querySelector("#movementStatusFilter"),
+  movementScopeFilter: document.querySelector("#movementScopeFilter"),
+  movementFromFilter: document.querySelector("#movementFromFilter"),
+  movementToFilter: document.querySelector("#movementToFilter"),
+  clearMovementFilters: document.querySelector("#clearMovementFilters"),
+  selectAllMovements: document.querySelector("#selectAllMovements"),
+  selectionSummary: document.querySelector("#selectionSummary"),
+  editSelectedMovements: document.querySelector("#editSelectedMovements"),
+  clearMovementSelection: document.querySelector("#clearMovementSelection"),
+  movementTableHint: document.querySelector("#movementTableHint"),
+  movementFeedback: document.querySelector("#movementFeedback"),
+  movementFilterFeedback: document.querySelector("#movementFilterFeedback"),
+  movementEditDialog: document.querySelector("#movementEditDialog"),
+  movementEditForm: document.querySelector("#movementEditForm"),
+  movementEditTitle: document.querySelector("#movementEditTitle"),
+  movementEditDescription: document.querySelector("#movementEditDescription"),
+  editDateEnabled: document.querySelector("#editDateEnabled"),
+  editMovementDate: document.querySelector("#editMovementDate"),
+  editStatusEnabled: document.querySelector("#editStatusEnabled"),
+  editMovementStatus: document.querySelector("#editMovementStatus"),
+  editMovementError: document.querySelector("#editMovementError"),
+  editMovementPreview: document.querySelector("#editMovementPreview"),
+  cancelMovementEdit: document.querySelector("#cancelMovementEdit"),
+  saveMovementEdit: document.querySelector("#saveMovementEdit"),
+  addMovementButton: document.querySelector("#addMovementButton"),
   minimumBalance: document.querySelector("#minimumBalance"),
   minimumBalanceDate: document.querySelector("#minimumBalanceDate"),
   largestOutflow: document.querySelector("#largestOutflow"),
@@ -132,6 +163,11 @@ function toISODate(date) {
 function parseISODate(value) {
   const [year, month, day] = value.split("-").map(Number);
   return new Date(year, month - 1, day);
+}
+
+function isValidISODate(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    && toISODate(parseISODate(value)) === value;
 }
 
 function differenceInDays(date, baseDate) {
@@ -209,6 +245,15 @@ function saveCustomState() {
   }
 }
 
+function persistCustomCandidate(candidate) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(candidate));
+  } catch (error) {
+    throw new Error("No se pudo guardar en este navegador. Los datos no se modificaron. Revisa el espacio o los permisos de almacenamiento e intenta de nuevo.");
+  }
+  state.custom = candidate;
+}
+
 function getActiveAccounts() {
   return state.mode === "demo" ? demoAccounts : state.custom.accounts;
 }
@@ -218,6 +263,7 @@ function getActiveMovements() {
     return demoMovements.map((movement) => ({
       ...movement,
       date: toISODate(addDays(today, movement.offsetDays)),
+      ...state.demoEdits.get(movement.id),
     }));
   }
 
@@ -239,6 +285,237 @@ function getFilteredMovements() {
   return getActiveMovements()
     .filter(isMovementIncluded)
     .sort((a, b) => parseISODate(a.date) - parseISODate(b.date));
+}
+
+// Table filters are deliberately separate from the forecast inputs above.
+function createMovementFilters() {
+  return { query: "", type: "all", status: "all", from: "", to: "", scope: "projection" };
+}
+
+function getMovementFilterError() {
+  const { from, to } = state.movementFilters;
+  if ((from && !isValidISODate(from)) || (to && !isValidISODate(to))) {
+    return "Introduce fechas válidas para filtrar.";
+  }
+  return from && to && from > to ? "La fecha Desde no puede ser posterior a Hasta." : "";
+}
+
+function normalizeMovementSearch(value) {
+  return String(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es");
+}
+
+function getVisibleMovements() {
+  if (getMovementFilterError()) return [];
+  const filters = state.movementFilters;
+  const query = normalizeMovementSearch(filters.query.trim());
+  return getActiveMovements().filter((movement) =>
+    (filters.scope === "all" || isMovementIncluded(movement))
+    && (!query || normalizeMovementSearch(movement.concept).includes(query))
+    && (filters.type === "all" || movement.type === filters.type)
+    && (filters.status === "all" || movement.status === filters.status)
+    && (!filters.from || movement.date >= filters.from)
+    && (!filters.to || movement.date <= filters.to)
+  ).sort((a, b) => parseISODate(a.date) - parseISODate(b.date));
+}
+
+function updateMovementSelection() {
+  const visibleIds = new Set(getVisibleMovements().map((movement) => movement.id));
+  for (const id of state.selectedMovementIds) {
+    if (!visibleIds.has(id)) state.selectedMovementIds.delete(id);
+  }
+  const count = state.selectedMovementIds.size;
+  els.selectAllMovements.checked = count > 0 && count === visibleIds.size;
+  els.selectAllMovements.indeterminate = count > 0 && count < visibleIds.size;
+  els.selectAllMovements.disabled = visibleIds.size === 0;
+  els.selectionSummary.textContent = `${count} ${count === 1 ? "movimiento seleccionado" : "movimientos seleccionados"}`;
+  els.editSelectedMovements.disabled = count === 0;
+  els.clearMovementSelection.disabled = count === 0;
+  els.movementsTableBody.querySelectorAll("[data-select-movement]").forEach((checkbox) => {
+    checkbox.checked = state.selectedMovementIds.has(checkbox.dataset.selectMovement);
+    checkbox.closest("tr").classList.toggle("is-selected", checkbox.checked);
+  });
+}
+
+function clearMovementSelection() {
+  state.selectedMovementIds.clear();
+  updateMovementSelection();
+}
+
+function syncMovementFilterControls() {
+  const filters = state.movementFilters;
+  els.movementSearch.value = filters.query;
+  els.movementTypeFilter.value = filters.type;
+  els.movementStatusFilter.value = filters.status;
+  els.movementScopeFilter.value = filters.scope;
+  els.movementFromFilter.value = filters.from;
+  els.movementToFilter.value = filters.to;
+}
+
+function prepareMovementEdit(movements, ids, patch) {
+  if (!Array.isArray(ids) || ids.length === 0 || new Set(ids).size !== ids.length) {
+    throw new Error("Selecciona movimientos únicos antes de editar.");
+  }
+  const fields = patch && typeof patch === "object" ? Object.keys(patch) : [];
+  if (fields.length === 0 || fields.some((field) => field !== "date" && field !== "status")) {
+    throw new Error("Elige cambiar fecha, estatus o ambos.");
+  }
+  if (fields.includes("date") && (!isValidISODate(patch.date) || patch.date < todayISO)) {
+    throw new Error("La nueva fecha debe ser válida y no puede ser anterior a hoy.");
+  }
+  if (fields.includes("status") && !["confirmed", "pending"].includes(patch.status)) {
+    throw new Error("Elige Confirmado o Por confirmar.");
+  }
+  const selected = new Set(ids);
+  const counts = new Map(ids.map((id) => [id, 0]));
+  movements.forEach((movement) => {
+    if (selected.has(movement.id)) counts.set(movement.id, counts.get(movement.id) + 1);
+  });
+  if ([...counts.values()].some((count) => count !== 1)) {
+    throw new Error("Hay movimientos ausentes o con identificadores duplicados. Cierra el editor y revisa la selección.");
+  }
+  let changedCount = 0;
+  const updated = movements.map((movement) => {
+    if (!selected.has(movement.id) || !fields.some((field) => movement[field] !== patch[field])) return movement;
+    changedCount += 1;
+    return { ...movement, ...patch };
+  });
+  return { movements: updated, changedCount };
+}
+
+function commitMovementEdit(ids, patch, mode) {
+  if (mode !== state.mode || !["demo", "custom"].includes(mode)) {
+    throw new Error("La vista cambió. Cierra el editor y selecciona de nuevo los movimientos.");
+  }
+  const result = prepareMovementEdit(getActiveMovements(), ids, patch);
+  if (result.changedCount === 0) return 0;
+  if (mode === "custom") {
+    persistCustomCandidate({ ...state.custom, movements: result.movements });
+  } else {
+    const selected = new Set(ids);
+    result.movements.forEach((movement) => {
+      if (selected.has(movement.id)) {
+        state.demoEdits.set(movement.id, { date: movement.date, status: movement.status });
+      }
+    });
+  }
+  return result.changedCount;
+}
+
+function getMovementEditPatch() {
+  const edit = state.movementEdit;
+  const patch = {};
+  if (els.editDateEnabled.checked) patch.date = els.editMovementDate.value;
+  if (els.editStatusEnabled.checked) patch.status = els.editMovementStatus.value;
+  // An unchanged historical date must not block an individual status edit.
+  if (edit && edit.ids.length === 1) {
+    Object.keys(patch).forEach((field) => {
+      if (patch[field] === edit.original[0][field]) delete patch[field];
+    });
+  }
+  return patch;
+}
+
+function updateMovementEditPreview() {
+  els.editMovementDate.disabled = !els.editDateEnabled.checked;
+  els.editMovementStatus.disabled = !els.editStatusEnabled.checked;
+  els.editMovementError.textContent = "";
+  els.saveMovementEdit.disabled = true;
+  if (!state.movementEdit) return;
+  const patch = getMovementEditPatch();
+  if (Object.keys(patch).length === 0) {
+    els.editMovementPreview.textContent = "Elige los campos y los nuevos valores que quieres aplicar.";
+    return;
+  }
+  try {
+    const result = prepareMovementEdit(getActiveMovements(), state.movementEdit.ids, patch);
+    const fields = Object.keys(patch).map((field) => field === "date" ? "fecha" : "estatus").join(" y ");
+    els.editMovementPreview.textContent = result.changedCount
+      ? `Se aplicarán los cambios de ${fields} a ${result.changedCount} de ${state.movementEdit.ids.length} movimientos seleccionados.`
+      : "Los movimientos ya tienen los valores indicados.";
+    els.saveMovementEdit.disabled = result.changedCount === 0;
+  } catch (error) {
+    els.editMovementPreview.textContent = "No se aplicarán cambios hasta corregir los datos.";
+    els.editMovementError.textContent = error.message;
+  }
+}
+
+function openMovementEditor(ids, opener = document.activeElement) {
+  const active = getActiveMovements();
+  const originals = ids.map((id) => active.filter((movement) => movement.id === id));
+  if (ids.length === 0 || new Set(ids).size !== ids.length || originals.some((matches) => matches.length !== 1)) {
+    els.movementFeedback.textContent = "No se puede editar esta selección: hay movimientos ausentes o identificadores duplicados.";
+    return;
+  }
+  const movements = originals.map(([movement]) => ({ ...movement }));
+  state.movementEdit = {
+    ids: [...ids], mode: state.mode, original: movements, opener,
+    openerId: opener?.dataset?.editMovement,
+    openerInCapture: Boolean(opener?.closest?.("#captureList")),
+  };
+  const single = ids.length === 1;
+  const first = movements[0];
+  els.movementEditTitle.textContent = single ? "Editar movimiento" : `Editar ${ids.length} movimientos`;
+  els.movementEditDescription.textContent = single
+    ? `${first.concept} · ${currency.format(first.amount)}. Cambia su fecha o estatus.`
+    : `Los nuevos valores se aplicarán a los ${ids.length} movimientos seleccionados.`;
+  els.editDateEnabled.checked = single;
+  els.editStatusEnabled.checked = single;
+  els.editMovementDate.min = todayISO;
+  els.editMovementDate.value = movements.every((movement) => movement.date === first.date) ? first.date : todayISO;
+  els.editMovementStatus.value = movements.every((movement) => movement.status === first.status) ? first.status : "confirmed";
+  updateMovementEditPreview();
+  els.movementEditDialog.showModal();
+  (single ? els.editMovementDate : els.editDateEnabled).focus();
+}
+
+function finishMovementEditor() {
+  const edit = state.movementEdit;
+  const opener = edit?.opener;
+  state.movementEdit = null;
+  if (opener?.isConnected && !opener.disabled) {
+    opener.focus();
+    return;
+  }
+  if (edit?.openerId && edit.mode === state.mode) {
+    const container = edit.openerInCapture ? els.captureList : els.movementsTableBody;
+    const replacement = [...container.querySelectorAll("[data-edit-movement]")]
+      .find((button) => button.dataset.editMovement === edit.openerId);
+    if (replacement) {
+      replacement.focus();
+      return;
+    }
+  }
+  els.movementSearch.focus();
+}
+
+function submitMovementEdit(event) {
+  event.preventDefault();
+  const edit = state.movementEdit;
+  if (!edit) return;
+  try {
+    const count = commitMovementEdit(edit.ids, getMovementEditPatch(), edit.mode);
+    if (!count) {
+      els.editMovementError.textContent = "No hay cambios que guardar.";
+      return;
+    }
+    state.selectedMovementIds.clear();
+    renderCaptureList();
+    renderDashboard();
+    const hiddenCount = edit.ids.filter((id) => !getVisibleMovements().some((movement) => movement.id === id)).length;
+    els.movementFeedback.textContent = `${count} ${count === 1 ? "movimiento actualizado" : "movimientos actualizados"}. `
+      + (state.mode === "demo" ? "Cambios de ejemplo temporales; se restablecen al recargar. " : "Cambios guardados en este navegador. ")
+      + (hiddenCount ? `${hiddenCount} ${hiddenCount === 1 ? "queda" : "quedan"} fuera de los filtros actuales. Usa Todos los movimientos o limpia los filtros para verlos.` : "");
+    els.movementEditDialog.close();
+  } catch (error) {
+    els.editMovementError.textContent = error.message;
+  }
+}
+
+function handleCaptureKeydown(event) {
+  if (event.key === "Enter" && event.target.tagName === "INPUT" && !event.isComposing) {
+    event.preventDefault();
+    els.captureFeedback.textContent = "Tu captura se conserva. Usa Agregar movimiento para registrarla.";
+  }
 }
 
 function getPeriodTotals(filteredMovements) {
@@ -294,7 +571,12 @@ function getForecastSeries(filteredMovements, startingBalance) {
 }
 
 function setMode(mode, options = {}) {
+  if (els.movementEditDialog.open) els.movementEditDialog.close();
   state.mode = mode;
+  state.selectedMovementIds.clear();
+  state.movementFilters = createMovementFilters();
+  syncMovementFilterControls();
+  els.movementFeedback.textContent = "";
   const isCustom = mode === "custom";
 
   els.demoModeButton.classList.toggle("is-active", !isCustom);
@@ -407,7 +689,7 @@ function renderCaptureList() {
       const typeLabel = isInflow ? "Cobro" : "Pago";
       const statusLabel = movement.status === "pending" ? "Por confirmar" : "Confirmado";
       return `
-        <div class="capture-item">
+        <div class="capture-item" data-movement-id="${escapeHTML(movement.id)}">
           <div>
             <strong>${escapeHTML(movement.concept)}</strong>
             <small>${shortDate.format(parseISODate(movement.date))} · ${typeLabel} · ${statusLabel}</small>
@@ -415,12 +697,17 @@ function renderCaptureList() {
           <span class="capture-amount ${isInflow ? "amount-in" : "amount-out"}">
             ${isInflow ? "+" : "−"}${currency.format(movement.amount)}
           </span>
-          <button
-            class="icon-button"
-            type="button"
-            aria-label="Eliminar ${escapeHTML(movement.concept)}"
-            data-delete-movement="${escapeHTML(movement.id)}"
-          >×</button>
+          <div class="capture-item-actions">
+            <button class="capture-edit-button" type="button"
+              aria-label="Editar ${escapeHTML(movement.concept)}"
+              data-edit-movement="${escapeHTML(movement.id)}">Editar</button>
+            <button
+              class="icon-button"
+              type="button"
+              aria-label="Eliminar ${escapeHTML(movement.concept)}"
+              data-delete-movement="${escapeHTML(movement.id)}"
+            >×</button>
+          </div>
         </div>
       `;
     })
@@ -514,14 +801,19 @@ function renderInsights(filteredMovements, forecastSeries) {
   }
 }
 
-function renderMovements(filteredMovements) {
+function renderMovements() {
+  const filteredMovements = getVisibleMovements();
+  els.movementFilterFeedback.textContent = getMovementFilterError();
+  els.movementTableHint.textContent = "Haz doble clic en una fila o usa Editar. Los filtros afectan solo esta tabla; los indicadores mantienen la proyección actual. "
+    + (state.mode === "demo" ? "Los cambios del ejemplo son temporales y se restablecen al recargar." : "Tus cambios se guardan solo en este navegador.");
+  els.movementSummary.textContent = `${filteredMovements.length} de ${getActiveMovements().length} movimientos`;
   if (filteredMovements.length === 0) {
     els.movementsTableBody.innerHTML = `
       <tr class="empty-state">
-        <td colspan="5">No hay movimientos para el escenario seleccionado.</td>
+        <td colspan="7">No hay movimientos con estos filtros. Prueba Todos los movimientos o limpia los filtros.</td>
       </tr>
     `;
-    els.movementSummary.textContent = "0 movimientos";
+    updateMovementSelection();
     return;
   }
 
@@ -533,7 +825,10 @@ function renderMovements(filteredMovements) {
       const statusClass = movement.status === "confirmed" ? "status-confirmed" : "status-pending";
 
       return `
-        <tr>
+        <tr data-movement-id="${escapeHTML(movement.id)}" title="Doble clic para editar fecha o estatus">
+          <td class="movement-selection-cell"><input class="movement-checkbox" type="checkbox"
+            data-select-movement="${escapeHTML(movement.id)}"
+            aria-label="Seleccionar ${escapeHTML(movement.concept)} del ${escapeHTML(movement.date)}" /></td>
           <td>${shortDate.format(parseISODate(movement.date))}</td>
           <td><span class="movement-concept">${escapeHTML(movement.concept)}</span></td>
           <td>${isInflow ? "Cobro" : "Pago"}</td>
@@ -541,14 +836,15 @@ function renderMovements(filteredMovements) {
           <td class="align-right amount ${isInflow ? "amount-in" : "amount-out"}">
             ${amountSign}${currency.format(movement.amount)}
           </td>
+          <td class="movement-row-actions"><button type="button" class="movement-edit-button"
+            data-edit-movement="${escapeHTML(movement.id)}"
+            aria-label="Editar ${escapeHTML(movement.concept)}">Editar</button></td>
         </tr>
       `;
     })
     .join("");
 
-  els.movementSummary.textContent = `${filteredMovements.length} ${
-    filteredMovements.length === 1 ? "movimiento" : "movimientos"
-  }`;
+  updateMovementSelection();
 }
 
 function niceCeiling(value) {
@@ -860,7 +1156,7 @@ function renderDashboard() {
   renderAccounts(accounts);
   renderKpis(accounts, filteredMovements, totals, forecastSeries);
   renderInsights(filteredMovements, forecastSeries);
-  renderMovements(filteredMovements);
+  renderMovements();
   const hasChartData = startingBalance !== 0 || filteredMovements.length > 0;
   renderChart(forecastSeries, { hasData: hasChartData });
 
@@ -871,13 +1167,14 @@ function renderDashboard() {
 
 function addMovement(event) {
   event.preventDefault();
+  if (state.mode !== "custom") return;
   els.captureFeedback.textContent = "";
 
   const concept = els.movementConcept.value.trim();
   const amount = Number(els.movementAmount.value);
   const date = els.movementDate.value;
 
-  if (!concept || !date || !Number.isFinite(amount) || amount <= 0) {
+  if (!concept || !isValidISODate(date) || !Number.isFinite(amount) || amount <= 0) {
     els.captureFeedback.textContent = "Completa la fecha, el concepto y un importe mayor a cero.";
     return;
   }
@@ -887,16 +1184,20 @@ function addMovement(event) {
     return;
   }
 
-  state.custom.movements.push({
+  const movement = {
     id: createId("movement"),
     date,
     concept,
     type: els.movementType.value === "outflow" ? "outflow" : "inflow",
     status: els.movementStatus.value === "pending" ? "pending" : "confirmed",
     amount,
-  });
-
-  saveCustomState();
+  };
+  try {
+    persistCustomCandidate({ ...state.custom, movements: [...state.custom.movements, movement] });
+  } catch (error) {
+    els.captureFeedback.textContent = error.message;
+    return;
+  }
   els.captureFeedback.textContent = "Movimiento agregado a la proyección.";
   els.movementForm.reset();
   els.movementDate.value = todayISO;
@@ -921,6 +1222,7 @@ function resetCustomProjection() {
   }
 
   state.custom = createDefaultCustomState();
+  state.selectedMovementIds.clear();
   localStorage.removeItem(STORAGE_KEY);
   els.captureFeedback.textContent = "La proyección volvió a cero.";
   renderBuilder();
@@ -941,11 +1243,13 @@ function bindEvents() {
 
   els.horizon.addEventListener("change", (event) => {
     state.horizon = Number(event.target.value);
+    state.selectedMovementIds.clear();
     renderDashboard();
   });
 
   els.includePending.addEventListener("change", (event) => {
     state.includePending = event.target.checked;
+    state.selectedMovementIds.clear();
     renderDashboard();
   });
 
@@ -978,6 +1282,67 @@ function bindEvents() {
   });
 
   els.movementForm.addEventListener("submit", addMovement);
+  els.movementForm.addEventListener("keydown", handleCaptureKeydown);
+
+  const filterControls = [
+    [els.movementSearch, "query", "input"],
+    [els.movementTypeFilter, "type", "change"],
+    [els.movementStatusFilter, "status", "change"],
+    [els.movementScopeFilter, "scope", "change"],
+    [els.movementFromFilter, "from", "change"],
+    [els.movementToFilter, "to", "change"],
+  ];
+  filterControls.forEach(([control, key, eventName]) => {
+    control.addEventListener(eventName, () => {
+      state.movementFilters[key] = control.value;
+      state.selectedMovementIds.clear();
+      els.movementFeedback.textContent = "";
+      renderMovements();
+    });
+  });
+  els.clearMovementFilters.addEventListener("click", () => {
+    state.movementFilters = createMovementFilters();
+    state.selectedMovementIds.clear();
+    els.movementFeedback.textContent = "";
+    syncMovementFilterControls();
+    renderMovements();
+  });
+  els.selectAllMovements.addEventListener("change", () => {
+    state.selectedMovementIds = els.selectAllMovements.checked
+      ? new Set(getVisibleMovements().map((movement) => movement.id)) : new Set();
+    updateMovementSelection();
+  });
+  els.clearMovementSelection.addEventListener("click", clearMovementSelection);
+  els.movementsTableBody.addEventListener("change", (event) => {
+    const checkbox = event.target.closest("[data-select-movement]");
+    if (!checkbox) return;
+    if (checkbox.checked) state.selectedMovementIds.add(checkbox.dataset.selectMovement);
+    else state.selectedMovementIds.delete(checkbox.dataset.selectMovement);
+    updateMovementSelection();
+  });
+  els.editSelectedMovements.addEventListener("click", () => {
+    updateMovementSelection();
+    openMovementEditor([...state.selectedMovementIds], els.editSelectedMovements);
+  });
+  [els.movementsTableBody, els.captureList].forEach((container) => {
+    container.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-edit-movement]");
+      if (button) openMovementEditor([button.dataset.editMovement], button);
+    });
+    container.addEventListener("dblclick", (event) => {
+      if (event.target.closest("button, input, select, label, a")) return;
+      const row = event.target.closest("[data-movement-id]");
+      if (row) openMovementEditor([row.dataset.movementId], row.querySelector("[data-edit-movement]"));
+    });
+  });
+  els.movementEditForm.addEventListener("submit", submitMovementEdit);
+  [els.editDateEnabled, els.editStatusEnabled, els.editMovementStatus].forEach((control) => {
+    control.addEventListener("change", updateMovementEditPreview);
+  });
+  els.editMovementDate.addEventListener("input", updateMovementEditPreview);
+  els.editMovementDate.addEventListener("change", updateMovementEditPreview);
+  els.cancelMovementEdit.addEventListener("click", () => els.movementEditDialog.close());
+  els.movementEditDialog.addEventListener("close", finishMovementEditor);
 
   els.captureList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-delete-movement]");
@@ -1002,3 +1367,4 @@ function initialize() {
 }
 
 initialize();
+

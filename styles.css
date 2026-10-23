@@ -523,6 +523,12 @@ a:focus-visible {
   font-weight: 600;
 }
 
+.capture-help {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
 .captured-movements {
   margin-top: 12px;
   padding-top: 16px;
@@ -598,6 +604,25 @@ a:focus-visible {
   border-radius: 9px;
   background: var(--coral-soft);
   color: #a43734;
+  cursor: pointer;
+}
+
+.capture-item-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.capture-edit-button {
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: white;
+  color: var(--blue-deep);
+  font-size: 0.74rem;
+  font-weight: 700;
   cursor: pointer;
 }
 
@@ -757,6 +782,284 @@ a:focus-visible {
 .table-wrap {
   overflow-x: auto;
   border-radius: 12px;
+}
+
+.movement-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--canvas);
+}
+
+.movement-search-field {
+  grid-column: span 2;
+}
+
+.movement-filters .field-group {
+  min-width: 0;
+}
+
+.movement-filter-clear {
+  align-self: end;
+  min-width: 0;
+  font-size: 0.82rem;
+}
+
+.movement-table-hint,
+.movement-filter-feedback,
+.movement-feedback {
+  margin: 10px 0;
+  font-size: 0.78rem;
+}
+
+.movement-table-hint {
+  color: var(--muted);
+}
+
+.movement-filter-feedback {
+  color: #a43734;
+}
+
+.movement-filter-feedback:empty,
+.movement-feedback:empty {
+  display: none;
+}
+
+.movement-feedback {
+  color: var(--blue-deep);
+  font-weight: 600;
+}
+
+.movement-selection-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.movement-selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.movement-selection-actions .button {
+  min-height: 40px;
+  font-size: 0.79rem;
+}
+
+.movement-selection-actions .button:disabled,
+.movement-edit-actions .button:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+  transform: none;
+  cursor: not-allowed;
+}
+
+input.movement-checkbox {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  margin: 0;
+  vertical-align: middle;
+  accent-color: var(--blue);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+input.movement-checkbox:disabled {
+  cursor: not-allowed;
+}
+
+.movements-table .movement-selection-cell {
+  width: 44px;
+}
+
+.movements-table tbody tr[data-movement-id]:hover {
+  background: #f8faff;
+}
+
+.movements-table tbody tr.is-selected {
+  background: var(--blue-soft);
+}
+
+.movements-table tbody tr.is-selected:hover {
+  background: #e4eeff;
+}
+
+.movement-row-actions {
+  text-align: right;
+}
+
+.movement-edit-button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: white;
+  color: var(--blue-deep);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.movement-edit-button:hover,
+.capture-edit-button:hover {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.movement-edit-dialog {
+  width: min(560px, calc(100% - 32px));
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: white;
+  color: var(--ink);
+  box-shadow: 0 24px 80px rgba(20, 35, 59, 0.26);
+  overflow-y: auto;
+}
+
+.movement-edit-dialog::backdrop {
+  background: rgba(20, 35, 59, 0.55);
+}
+
+.movement-edit-dialog h2 {
+  margin: 7px 0 12px;
+  font-family: "Sora", sans-serif;
+  font-size: 1.4rem;
+  letter-spacing: -0.025em;
+}
+
+.movement-edit-description {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.movement-edit-help {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.movement-edit-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.movement-edit-field {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--canvas);
+}
+
+.movement-edit-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+  font-size: 0.83rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.movement-edit-field > input:disabled,
+.movement-edit-field > select:disabled {
+  background: #edf0f4;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.movement-edit-preview {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border-radius: 11px;
+  background: var(--blue-soft);
+  color: var(--blue-deep);
+  font-size: 0.82rem;
+}
+
+.movement-edit-preview:empty {
+  display: none;
+}
+
+.movement-edit-error {
+  margin: 12px 0 0;
+  color: #a43734;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.movement-edit-error:empty {
+  display: none;
+}
+
+.movement-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+@media (max-width: 860px) {
+  .movement-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .movement-filter-clear {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 480px) {
+  .movement-filters {
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+
+  .movement-search-field,
+  .movement-filter-clear {
+    grid-column: auto;
+  }
+
+  .movement-selection-actions {
+    width: 100%;
+  }
+
+  .movement-selection-actions .button {
+    flex: 1;
+    padding: 0 10px;
+  }
+
+  .movement-edit-dialog {
+    padding: 20px;
+  }
+
+  .movement-edit-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .movement-edit-actions {
+    flex-direction: column-reverse;
+  }
+
+  .movement-edit-actions .button {
+    width: 100%;
+  }
 }
 
 table {
@@ -1308,3 +1611,4 @@ footer {
     flex-direction: column;
   }
 }
+

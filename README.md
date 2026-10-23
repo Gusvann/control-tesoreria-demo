@@ -38,6 +38,34 @@ El CTA **Crear mi proyección** cambia a un escenario personal que comienza en c
 - La proyección es completamente client-side.
 - No requiere usuarios, contraseñas ni instalación.
 
+## Selección, filtros y edición de movimientos
+
+En **Próximos movimientos** puedes buscar por concepto y filtrar por tipo, estatus y rango de fechas. **Mostrar → Todos los movimientos** permite recuperar movimientos históricos, fuera del horizonte o por confirmar que no están incluidos en la proyección. Los filtros de la tabla no alteran los indicadores ni la gráfica.
+
+- Marca las casillas de las filas; la casilla de cabecera selecciona todos los resultados visibles.
+- Usa **Editar seleccionados** para aplicar una nueva fecha, un nuevo estatus o ambos. En lote, marca únicamente los campos que quieras cambiar.
+- Haz doble clic sobre una fila o usa **Editar** para cambiar un movimiento individual. También hay un botón Editar en la lista de captura.
+- Revisa el número de movimientos que se actualizarán y pulsa **Guardar cambios**. **Cancelar** y Escape descartan el borrador.
+- Al cambiar filtros, horizonte o vista se limpia la selección. Seleccionar no cambia el estatus de un movimiento.
+- Una nueva fecha debe ser válida y no anterior a hoy. Puedes cambiar solo el estatus de un movimiento histórico sin modificar su fecha.
+
+El nombre del campo es **estatus del movimiento**: **Confirmado** o **Por confirmar**. La proyección personal conserva sus cambios en este navegador. En **Ver ejemplo**, la edición es temporal y se restablece al recargar.
+
+### Enter durante la captura
+
+Enter en los campos de captura **conserva lo escrito y no registra el movimiento**. Para guardarlo, utiliza **Agregar movimiento**; el botón también puede activarse con el teclado. Un error de validación o almacenamiento conserva el borrador. Después de un registro explícito correcto, el formulario vuelve a estar listo para el siguiente movimiento.
+
+## Verificación del cambio
+
+Con Node.js instalado, ejecuta:
+
+```bash
+node --check app.js
+node tests/movements.test.cjs
+```
+
+No se necesitan dependencias para las pruebas. Consulta [la especificación](docs/movement-editing-spec.md) y [la evidencia de verificación](docs/movement-editing-verification.md) para conocer el alcance y los límites de las comprobaciones.
+
 ## Diseño
 
 - **Sora:** títulos, encabezados, cifras, indicadores y métricas.
@@ -87,3 +115,4 @@ La escala vertical se construye a partir del **saldo mínimo y máximo acumulado
 - Utiliza entre cuatro y cinco marcas principales cuando el rango lo permite.
 - No fuerza simetría entre valores positivos y negativos.
 - Cuando el escenario personal no contiene saldos ni movimientos, muestra un estado vacío en lugar de una escala arbitraria.
+
