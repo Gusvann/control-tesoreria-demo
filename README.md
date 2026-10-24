@@ -26,6 +26,7 @@ El CTA **Crear mi proyección** cambia a un escenario personal que comienza en c
 - capturar el saldo inicial por banco;
 - registrar cobros y pagos;
 - asignar fecha, concepto, importe y estatus;
+- especificar opcionalmente el banco de cada pago;
 - incluir o excluir movimientos por confirmar;
 - revisar el forecast desde la fecha actual;
 - borrar la proyección y comenzar de nuevo.
@@ -55,6 +56,14 @@ El nombre del campo es **estatus del movimiento**: **Confirmado** o **Por confir
 
 Enter en los campos de captura **conserva lo escrito y no registra el movimiento**. Para guardarlo, utiliza **Agregar movimiento**; el botón también puede activarse con el teclado. Un error de validación o almacenamiento conserva el borrador. Después de un registro explícito correcto, el formulario vuelve a estar listo para el siguiente movimiento.
 
+### Banco opcional en cada pago
+
+Al elegir **Tipo → Pago**, aparece **Banco (opcional)** con los bancos de tu proyección. Puedes dejar **Sin banco asignado** y guardar normalmente. El nombre del banco se muestra en la lista de captura y debajo del concepto en Próximos movimientos.
+
+En el modal de un pago puedes asignar, cambiar o quitar el banco. Para hacerlo en lote, selecciona únicamente pagos y activa **Cambiar banco**; los demás campos conservan sus valores si no los activas. Elegir **Sin banco asignado** elimina la asignación.
+
+La relación usa el ID del banco: si lo renombras, los pagos muestran su nuevo nombre. Si reduces el número de bancos y retiras uno asignado, sus pagos se conservan como **Banco no disponible** hasta que cambies o quites esa asignación. La información bancaria del pago no modifica los saldos iniciales ni el cálculo agregado de la proyección. Los pagos anteriores sin banco siguen siendo válidos.
+
 ## Verificación del cambio
 
 Con Node.js instalado, ejecuta:
@@ -65,6 +74,8 @@ node tests/movements.test.cjs
 ```
 
 No se necesitan dependencias para las pruebas. Consulta [la especificación](docs/movement-editing-spec.md) y [la evidencia de verificación](docs/movement-editing-verification.md) para conocer el alcance y los límites de las comprobaciones.
+
+La ampliación de banco opcional tiene su [especificación](docs/optional-payment-bank-spec.md) y [evidencia de verificación](docs/optional-payment-bank-verification.md).
 
 ## Diseño
 

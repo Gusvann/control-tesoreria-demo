@@ -61,6 +61,8 @@ const els = {
   movementType: document.querySelector("#movementType"),
   movementStatus: document.querySelector("#movementStatus"),
   movementAmount: document.querySelector("#movementAmount"),
+  movementBankField: document.querySelector("#movementBankField"),
+  movementBank: document.querySelector("#movementBank"),
   captureFeedback: document.querySelector("#captureFeedback"),
   capturedMovementCount: document.querySelector("#capturedMovementCount"),
   captureList: document.querySelector("#captureList"),
@@ -101,6 +103,9 @@ const els = {
   editMovementDate: document.querySelector("#editMovementDate"),
   editStatusEnabled: document.querySelector("#editStatusEnabled"),
   editMovementStatus: document.querySelector("#editMovementStatus"),
+  editBankField: document.querySelector("#editBankField"),
+  editBankEnabled: document.querySelector("#editBankEnabled"),
+  editMovementBank: document.querySelector("#editMovementBank"),
   editMovementError: document.querySelector("#editMovementError"),
   editMovementPreview: document.querySelector("#editMovementPreview"),
   cancelMovementEdit: document.querySelector("#cancelMovementEdit"),
@@ -227,6 +232,7 @@ function loadCustomState() {
           type: movement.type === "outflow" ? "outflow" : "inflow",
           status: movement.status === "pending" ? "pending" : "confirmed",
           amount: toSafeNumber(movement.amount),
+          ...(getMovementBankId(movement) ? { bankId: getMovementBankId(movement) } : {}),
         }))
       : [];
 
@@ -256,6 +262,32 @@ function persistCustomCandidate(candidate) {
 
 function getActiveAccounts() {
   return state.mode === "demo" ? demoAccounts : state.custom.accounts;
+}
+
+function getMovementBankId(movement) {
+  return movement.type === "outflow" && typeof movement.bankId === "string" ? movement.bankId : "";
+}
+
+function getMovementBankLabel(movement, accounts = getActiveAccounts()) {
+  const bankId = getMovementBankId(movement);
+  if (!bankId) return "Sin banco asignado";
+  return accounts.find((account) => account.id === bankId)?.name || "Banco no disponible";
+}
+
+function renderBankOptions(select, accounts, bankId = "", preserveUnavailable = false) {
+  const available = accounts.some((account) => account.id === bankId);
+  const selectedId = available || preserveUnavailable ? bankId : "";
+  select.innerHTML = '<option value="">Sin banco asignado</option>'
+    + accounts.map((account) => `<option value="${escapeHTML(account.id)}">${escapeHTML(account.name)}</option>`).join("")
+    + (selectedId && !available ? `<option value="${escapeHTML(selectedId)}" disabled>Banco no disponible</option>` : "");
+  select.value = selectedId;
+}
+
+function renderCaptureBank() {
+  const isPayment = els.movementType.value === "outflow";
+  els.movementBankField.hidden = !isPayment;
+  els.movementBank.disabled = !isPayment;
+  renderBankOptions(els.movementBank, state.custom.accounts, isPayment ? els.movementBank.value : "");
 }
 
 function getActiveMovements() {
@@ -351,13 +383,13 @@ function syncMovementFilterControls() {
   els.movementToFilter.value = filters.to;
 }
 
-function prepareMovementEdit(movements, ids, patch) {
+function prepareMovementEdit(movements, ids, patch, accounts = getActiveAccounts()) {
   if (!Array.isArray(ids) || ids.length === 0 || new Set(ids).size !== ids.length) {
     throw new Error("Selecciona movimientos únicos antes de editar.");
   }
   const fields = patch && typeof patch === "object" ? Object.keys(patch) : [];
-  if (fields.length === 0 || fields.some((field) => field !== "date" && field !== "status")) {
-    throw new Error("Elige cambiar fecha, estatus o ambos.");
+  if (fields.length === 0 || fields.some((field) => !["date", "status", "bankId"].includes(field))) {
+    throw new Error("Elige cambiar fecha, estatus o banco en los pagos.");
   }
   if (fields.includes("date") && (!isValidISODate(patch.date) || patch.date < todayISO)) {
     throw new Error("La nueva fecha debe ser válida y no puede ser anterior a hoy.");
@@ -373,9 +405,18 @@ function prepareMovementEdit(movements, ids, patch) {
   if ([...counts.values()].some((count) => count !== 1)) {
     throw new Error("Hay movimientos ausentes o con identificadores duplicados. Cierra el editor y revisa la selección.");
   }
+  if (fields.includes("bankId")) {
+    if (movements.some((movement) => selected.has(movement.id) && movement.type !== "outflow")) {
+      throw new Error("Para cambiar el banco, selecciona únicamente pagos.");
+    }
+    if (typeof patch.bankId !== "string" || (patch.bankId && accounts.filter((account) => account.id === patch.bankId).length !== 1)) {
+      throw new Error("Elige un banco disponible o Sin banco asignado.");
+    }
+  }
   let changedCount = 0;
   const updated = movements.map((movement) => {
-    if (!selected.has(movement.id) || !fields.some((field) => movement[field] !== patch[field])) return movement;
+    if (!selected.has(movement.id) || !fields.some((field) =>
+      (field === "bankId" ? getMovementBankId(movement) : movement[field]) !== patch[field])) return movement;
     changedCount += 1;
     return { ...movement, ...patch };
   });
@@ -386,7 +427,7 @@ function commitMovementEdit(ids, patch, mode) {
   if (mode !== state.mode || !["demo", "custom"].includes(mode)) {
     throw new Error("La vista cambió. Cierra el editor y selecciona de nuevo los movimientos.");
   }
-  const result = prepareMovementEdit(getActiveMovements(), ids, patch);
+  const result = prepareMovementEdit(getActiveMovements(), ids, patch, getActiveAccounts());
   if (result.changedCount === 0) return 0;
   if (mode === "custom") {
     persistCustomCandidate({ ...state.custom, movements: result.movements });
@@ -394,7 +435,11 @@ function commitMovementEdit(ids, patch, mode) {
     const selected = new Set(ids);
     result.movements.forEach((movement) => {
       if (selected.has(movement.id)) {
-        state.demoEdits.set(movement.id, { date: movement.date, status: movement.status });
+        state.demoEdits.set(movement.id, {
+          date: movement.date,
+          status: movement.status,
+          ...(movement.type === "outflow" ? { bankId: getMovementBankId(movement) } : {}),
+        });
       }
     });
   }
@@ -406,10 +451,12 @@ function getMovementEditPatch() {
   const patch = {};
   if (els.editDateEnabled.checked) patch.date = els.editMovementDate.value;
   if (els.editStatusEnabled.checked) patch.status = els.editMovementStatus.value;
+  if (!els.editBankEnabled.disabled && els.editBankEnabled.checked) patch.bankId = els.editMovementBank.value;
   // An unchanged historical date must not block an individual status edit.
   if (edit && edit.ids.length === 1) {
     Object.keys(patch).forEach((field) => {
-      if (patch[field] === edit.original[0][field]) delete patch[field];
+      const original = field === "bankId" ? getMovementBankId(edit.original[0]) : edit.original[0][field];
+      if (patch[field] === original) delete patch[field];
     });
   }
   return patch;
@@ -418,6 +465,7 @@ function getMovementEditPatch() {
 function updateMovementEditPreview() {
   els.editMovementDate.disabled = !els.editDateEnabled.checked;
   els.editMovementStatus.disabled = !els.editStatusEnabled.checked;
+  els.editMovementBank.disabled = els.editBankEnabled.disabled || !els.editBankEnabled.checked;
   els.editMovementError.textContent = "";
   els.saveMovementEdit.disabled = true;
   if (!state.movementEdit) return;
@@ -427,8 +475,9 @@ function updateMovementEditPreview() {
     return;
   }
   try {
-    const result = prepareMovementEdit(getActiveMovements(), state.movementEdit.ids, patch);
-    const fields = Object.keys(patch).map((field) => field === "date" ? "fecha" : "estatus").join(" y ");
+    const result = prepareMovementEdit(getActiveMovements(), state.movementEdit.ids, patch, getActiveAccounts());
+    const fieldLabels = { date: "fecha", status: "estatus", bankId: "banco" };
+    const fields = Object.keys(patch).map((field) => fieldLabels[field]).join(" y ");
     els.editMovementPreview.textContent = result.changedCount
       ? `Se aplicarán los cambios de ${fields} a ${result.changedCount} de ${state.movementEdit.ids.length} movimientos seleccionados.`
       : "Los movimientos ya tienen los valores indicados.";
@@ -454,15 +503,22 @@ function openMovementEditor(ids, opener = document.activeElement) {
   };
   const single = ids.length === 1;
   const first = movements[0];
+  const onlyPayments = movements.every((movement) => movement.type === "outflow");
   els.movementEditTitle.textContent = single ? "Editar movimiento" : `Editar ${ids.length} movimientos`;
   els.movementEditDescription.textContent = single
-    ? `${first.concept} · ${currency.format(first.amount)}. Cambia su fecha o estatus.`
+    ? `${first.concept} · ${currency.format(first.amount)}. Cambia su ${onlyPayments ? "fecha, estatus o banco" : "fecha o estatus"}.`
     : `Los nuevos valores se aplicarán a los ${ids.length} movimientos seleccionados.`;
   els.editDateEnabled.checked = single;
   els.editStatusEnabled.checked = single;
+  els.editBankField.hidden = !onlyPayments;
+  els.editBankEnabled.disabled = !onlyPayments;
+  els.editBankEnabled.checked = single && onlyPayments;
   els.editMovementDate.min = todayISO;
   els.editMovementDate.value = movements.every((movement) => movement.date === first.date) ? first.date : todayISO;
   els.editMovementStatus.value = movements.every((movement) => movement.status === first.status) ? first.status : "confirmed";
+  const bankId = getMovementBankId(first);
+  const commonBankId = onlyPayments && movements.every((movement) => getMovementBankId(movement) === bankId) ? bankId : "";
+  renderBankOptions(els.editMovementBank, getActiveAccounts(), commonBankId, true);
   updateMovementEditPreview();
   els.movementEditDialog.showModal();
   (single ? els.editMovementDate : els.editDateEnabled).focus();
@@ -692,7 +748,7 @@ function renderCaptureList() {
         <div class="capture-item" data-movement-id="${escapeHTML(movement.id)}">
           <div>
             <strong>${escapeHTML(movement.concept)}</strong>
-            <small>${shortDate.format(parseISODate(movement.date))} · ${typeLabel} · ${statusLabel}</small>
+            <small>${shortDate.format(parseISODate(movement.date))} · ${typeLabel} · ${statusLabel}${isInflow ? "" : ` · ${escapeHTML(getMovementBankLabel(movement, state.custom.accounts))}`}</small>
           </div>
           <span class="capture-amount ${isInflow ? "amount-in" : "amount-out"}">
             ${isInflow ? "+" : "−"}${currency.format(movement.amount)}
@@ -719,6 +775,7 @@ function renderBuilder() {
     return;
   }
   renderBanksEditor();
+  renderCaptureBank();
   renderCaptureList();
 }
 
@@ -825,12 +882,12 @@ function renderMovements() {
       const statusClass = movement.status === "confirmed" ? "status-confirmed" : "status-pending";
 
       return `
-        <tr data-movement-id="${escapeHTML(movement.id)}" title="Doble clic para editar fecha o estatus">
+        <tr data-movement-id="${escapeHTML(movement.id)}" title="Doble clic para editar movimiento">
           <td class="movement-selection-cell"><input class="movement-checkbox" type="checkbox"
             data-select-movement="${escapeHTML(movement.id)}"
             aria-label="Seleccionar ${escapeHTML(movement.concept)} del ${escapeHTML(movement.date)}" /></td>
           <td>${shortDate.format(parseISODate(movement.date))}</td>
-          <td><span class="movement-concept">${escapeHTML(movement.concept)}</span></td>
+          <td><span class="movement-concept">${escapeHTML(movement.concept)}</span>${isInflow ? "" : `<small class="movement-bank">${escapeHTML(getMovementBankLabel(movement))}</small>`}</td>
           <td>${isInflow ? "Cobro" : "Pago"}</td>
           <td><span class="status ${statusClass}">${statusLabel}</span></td>
           <td class="align-right amount ${isInflow ? "amount-in" : "amount-out"}">
@@ -1173,6 +1230,8 @@ function addMovement(event) {
   const concept = els.movementConcept.value.trim();
   const amount = Number(els.movementAmount.value);
   const date = els.movementDate.value;
+  const type = els.movementType.value === "outflow" ? "outflow" : "inflow";
+  const bankId = type === "outflow" ? els.movementBank.value : "";
 
   if (!concept || !isValidISODate(date) || !Number.isFinite(amount) || amount <= 0) {
     els.captureFeedback.textContent = "Completa la fecha, el concepto y un importe mayor a cero.";
@@ -1184,13 +1243,19 @@ function addMovement(event) {
     return;
   }
 
+  if (bankId && state.custom.accounts.filter((account) => account.id === bankId).length !== 1) {
+    els.captureFeedback.textContent = "Elige un banco disponible o Sin banco asignado.";
+    return;
+  }
+
   const movement = {
     id: createId("movement"),
     date,
     concept,
-    type: els.movementType.value === "outflow" ? "outflow" : "inflow",
+    type,
     status: els.movementStatus.value === "pending" ? "pending" : "confirmed",
     amount,
+    ...(bankId ? { bankId } : {}),
   };
   try {
     persistCustomCandidate({ ...state.custom, movements: [...state.custom.movements, movement] });
@@ -1203,6 +1268,7 @@ function addMovement(event) {
   els.movementDate.value = todayISO;
   els.movementType.value = "inflow";
   els.movementStatus.value = "confirmed";
+  els.movementBank.value = "";
   renderBuilder();
   renderDashboard();
   els.movementConcept.focus();
@@ -1278,11 +1344,16 @@ function bindEvents() {
 
     saveCustomState();
     els.initialTotal.textContent = currency.format(getAvailableBalance(state.custom.accounts));
+    if (field === "name") {
+      renderCaptureBank();
+      renderCaptureList();
+    }
     renderDashboard();
   });
 
   els.movementForm.addEventListener("submit", addMovement);
   els.movementForm.addEventListener("keydown", handleCaptureKeydown);
+  els.movementType.addEventListener("change", renderCaptureBank);
 
   const filterControls = [
     [els.movementSearch, "query", "input"],
@@ -1336,7 +1407,7 @@ function bindEvents() {
     });
   });
   els.movementEditForm.addEventListener("submit", submitMovementEdit);
-  [els.editDateEnabled, els.editStatusEnabled, els.editMovementStatus].forEach((control) => {
+  [els.editDateEnabled, els.editStatusEnabled, els.editMovementStatus, els.editBankEnabled, els.editMovementBank].forEach((control) => {
     control.addEventListener("change", updateMovementEditPreview);
   });
   els.editMovementDate.addEventListener("input", updateMovementEditPreview);

@@ -515,6 +515,27 @@ a:focus-visible {
   align-self: end;
 }
 
+.movement-bank-field {
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+
+#movementBankField[hidden],
+#editBankField[hidden] {
+  display: none;
+}
+
+.movement-bank-help {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.movement-bank-field:not([hidden]) + .movement-submit {
+  grid-column: 1 / -1;
+}
+
 .capture-feedback {
   min-height: 23px;
   margin-top: 10px;
@@ -967,6 +988,10 @@ input.movement-checkbox:disabled {
   background: var(--canvas);
 }
 
+.movement-edit-bank-field {
+  grid-column: 1 / -1;
+}
+
 .movement-edit-toggle {
   display: flex;
   align-items: center;
@@ -1100,6 +1125,15 @@ tbody tr:last-child td {
 .movement-concept {
   color: var(--ink);
   font-weight: 700;
+}
+
+.movement-bank {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 400;
+  line-height: 1.45;
 }
 
 .account-share {

@@ -133,9 +133,9 @@ function movement(id, date, extra = {}) {
   return { id, date, concept: `Movimiento ${id}`, type: "inflow", status: "confirmed", amount: 100, ...extra };
 }
 
-function seed(h, movements) {
+function seed(h, movements, accounts = [{ id: "bank-test", name: "Banco de prueba", balance: 1000 }]) {
   h.run('state.mode = "custom"; state.custom = input;', {
-    accounts: [{ id: "bank-test", name: "Banco de prueba", balance: 1000 }],
+    accounts,
     movements,
   });
 }
@@ -542,4 +542,246 @@ test("R8: initialized capture keydown wiring preserves a draft on Enter", () => 
   assert.equal(prevented, true);
   assert.equal(h.run("els.movementConcept.value"), "Sigue aquí");
   assert.equal(h.run("state.custom.movements.length"), 0);
+});
+
+// Optional payment-bank assignment. Every record and account in these cases is
+// synthetic; a bank assignment is metadata and must not alter cash balances.
+function payment(id, date, extra = {}) {
+  return movement(id, date, { type: "outflow", ...extra });
+}
+
+function paymentDraft(h, bankId = "") {
+  h.run('els.movementDate.value = input.date; els.movementConcept.value = "Pago sintético"; els.movementAmount.value = "125.50"; els.movementType.value = "outflow"; els.movementStatus.value = "pending"; els.movementBank.value = input.bankId;', { date: h.day(2), bankId });
+}
+
+test("R10: legacy payments without bankId load without losing their financial data", () => {
+  const legacy = {
+    accounts: [{ id: "bank-legacy", name: "Banco histórico", balance: 1234.5 }],
+    movements: [payment("old-payment", "2028-05-01", { amount: 987.65 }), movement("old-inflow", "2028-05-02")],
+  };
+  const h = harness(legacy);
+  assert.deepEqual(h.json("state.custom"), legacy);
+  assert.equal(h.run("getMovementBankId(state.custom.movements[0])"), "");
+  assert.equal(h.run("getMovementBankLabel(state.custom.movements[0], state.custom.accounts)"), "Sin banco asignado");
+  assert.equal(h.storage.writes, 0, "reading a legacy projection must not rewrite it");
+});
+
+test("R10: bank IDs apply only to payments and malformed optional values mean unassigned", () => {
+  const h = harness();
+  for (const value of [undefined, null, 123, {}, []]) {
+    assert.equal(h.run("getMovementBankId(input)", payment("a", h.day(), { bankId: value })), "");
+  }
+  assert.equal(h.run("getMovementBankId(input)", payment("a", h.day(), { bankId: "bank-test" })), "bank-test");
+  assert.equal(h.run("getMovementBankId(input)", movement("a", h.day(), { bankId: "bank-test" })), "");
+});
+
+test("R10: a payment can be saved with an empty optional bank", () => {
+  const h = harness();
+  seed(h, []);
+  paymentDraft(h);
+  h.run("addMovement(input)", { preventDefault() {} });
+  assert.equal(h.run("state.custom.movements.length"), 1);
+  assert.equal(h.run("state.custom.movements[0].type"), "outflow");
+  assert.equal(h.run("getMovementBankId(state.custom.movements[0])"), "");
+  assert.equal(h.saved().movements[0].amount, 125.5);
+  assert.equal(h.storage.writes, 1);
+});
+
+test("R10: assigned payment capture persists the stable account ID across reload", () => {
+  const h = harness();
+  seed(h, []);
+  paymentDraft(h, "bank-test");
+  h.run("addMovement(input)", { preventDefault() {} });
+  assert.equal(h.saved().movements[0].bankId, "bank-test");
+  assert.deepEqual(h.saved().accounts, [{ id: "bank-test", name: "Banco de prueba", balance: 1000 }]);
+  const reloaded = harness(h.saved());
+  assert.equal(reloaded.run("getMovementBankId(state.custom.movements[0])"), "bank-test");
+  assert.equal(reloaded.run("getMovementBankLabel(state.custom.movements[0], state.custom.accounts)"), "Banco de prueba");
+});
+
+test("R10: an inflow ignores a residual bank choice when explicitly submitted", () => {
+  const h = harness();
+  seed(h, []);
+  paymentDraft(h, "bank-test");
+  h.run('els.movementType.value = "inflow"; addMovement(input);', { preventDefault() {} });
+  assert.equal(h.run("state.custom.movements[0].type"), "inflow");
+  assert.equal(h.run("getMovementBankId(state.custom.movements[0])"), "");
+  assert.equal(h.saved().movements[0].bankId ?? "", "");
+});
+
+test("R10: unknown bank capture rejects the submission and keeps the draft", () => {
+  const h = harness();
+  seed(h, []);
+  paymentDraft(h, "bank-not-registered");
+  h.run("addMovement(input)", { preventDefault() {} });
+  assert.deepEqual(h.json("state.custom.movements"), []);
+  assert.equal(h.run("els.movementConcept.value"), "Pago sintético");
+  assert.equal(h.run("els.movementAmount.value"), "125.50");
+  assert.equal(h.storage.writes, 0);
+  assert.notEqual(h.run("els.captureFeedback.textContent"), "");
+});
+
+test("R10: assigning, changing and removing a payment bank preserve all financial values", () => {
+  const h = harness();
+  const accounts = [
+    { id: "bank-a", name: "Banco Alfa", balance: 800 },
+    { id: "bank-b", name: "Banco Beta", balance: 200 },
+  ];
+  seed(h, [payment("p", h.day(1), { amount: 45.67 }), movement("i", h.day(2), { amount: 100 })], accounts);
+  const before = h.json("state.custom");
+  const totals = h.json("getPeriodTotals(getFilteredMovements())");
+  const balance = h.run("getForecastSeries(getFilteredMovements(), getAvailableBalance()).at(-1).balance");
+  assert.equal(h.run('commitMovementEdit(["p"], { bankId: "bank-a" }, "custom")'), 1);
+  assert.equal(h.run('commitMovementEdit(["p"], { bankId: "bank-b" }, "custom")'), 1);
+  assert.equal(h.run("getMovementBankLabel(state.custom.movements[0])"), "Banco Beta");
+  assert.equal(h.run('commitMovementEdit(["p"], { bankId: "" }, "custom")'), 1);
+  assert.equal(h.run("getMovementBankId(state.custom.movements[0])"), "");
+  assert.deepEqual(h.json("state.custom.accounts"), before.accounts);
+  assert.deepEqual(h.json("state.custom.movements.map(({ bankId, ...financial }) => financial)"), before.movements);
+  assert.deepEqual(h.json("getPeriodTotals(getFilteredMovements())"), totals);
+  assert.equal(h.run("getForecastSeries(getFilteredMovements(), getAvailableBalance()).at(-1).balance"), balance);
+  assert.equal(h.storage.writes, 3);
+});
+
+test("R10: clearing an already-unassigned legacy payment is a no-op", () => {
+  const h = harness();
+  seed(h, [payment("p", h.day(1))]);
+  const before = h.json("state.custom");
+  assert.equal(h.run('commitMovementEdit(["p"], { bankId: "" }, "custom")'), 0);
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("R10: a payment-only batch can share a bank while preserving mixed dates and statuses", () => {
+  const h = harness();
+  seed(h, [payment("p1", h.day(-2)), payment("p2", h.day(3), { status: "pending", amount: 50 }), payment("other", h.day(4))]);
+  const before = h.json("state.custom.movements");
+  assert.equal(h.run('commitMovementEdit(["p1", "p2"], { bankId: "bank-test" }, "custom")'), 2);
+  assert.deepEqual(h.json("state.custom.movements"), [{ ...before[0], bankId: "bank-test" }, { ...before[1], bankId: "bank-test" }, before[2]]);
+  assert.equal(h.storage.writes, 1);
+});
+
+test("R10: mixed inflow/payment batches reject bank assignment and clearing atomically", () => {
+  const h = harness();
+  seed(h, [payment("p", h.day(1)), movement("i", h.day(2))]);
+  const before = h.json("state.custom");
+  for (const bankId of ["bank-test", ""]) {
+    assert.throws(() => h.run('commitMovementEdit(["p", "i"], { bankId: input, status: "pending" }, "custom")', bankId));
+    assert.deepEqual(h.json("state.custom"), before);
+    assert.equal(h.storage.writes, 0);
+  }
+  assert.equal(h.run('commitMovementEdit(["p", "i"], { status: "pending" }, "custom")'), 2, "a mixed batch must still support the previously authorized status edit");
+});
+
+test("R10: unknown or ambiguous bank IDs cannot partially apply other fields", () => {
+  const h = harness();
+  seed(h, [payment("p", h.day(1))]);
+  const before = h.json("state.custom");
+  for (const bankId of ["unknown", 123, null]) {
+    assert.throws(() => h.run('commitMovementEdit(["p"], { bankId: input, status: "pending" }, "custom")', bankId));
+    assert.deepEqual(h.json("state.custom"), before);
+    assert.equal(h.storage.writes, 0);
+  }
+  h.run('state.custom.accounts.push({ id: "bank-test", name: "Otra cuenta con ID duplicado", balance: 5 });');
+  const duplicated = h.json("state.custom");
+  assert.throws(() => h.run('commitMovementEdit(["p"], { bankId: "bank-test", status: "pending" }, "custom")'));
+  assert.deepEqual(h.json("state.custom"), duplicated);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("R10: renaming a bank preserves its ID and resolves the current name", () => {
+  const h = harness();
+  seed(h, [payment("p", h.day(1), { bankId: "bank-test" })]);
+  h.run('state.custom.accounts[0].name = "Banco renombrado";');
+  assert.equal(h.run("getMovementBankId(state.custom.movements[0])"), "bank-test");
+  assert.equal(h.run("getMovementBankLabel(state.custom.movements[0])"), "Banco renombrado");
+});
+
+test("R10: removing and re-adding accounts never remaps a payment to a new bank", () => {
+  const h = harness();
+  seed(h, [payment("p", h.day(1), { bankId: "bank-b" })], [
+    { id: "bank-a", name: "Banco Alfa", balance: 800 },
+    { id: "bank-b", name: "Banco Beta", balance: 200 },
+  ]);
+  h.run("syncBankCount(1);");
+  assert.equal(h.run("getMovementBankId(state.custom.movements[0])"), "bank-b");
+  assert.equal(h.run("getMovementBankLabel(state.custom.movements[0])"), "Banco no disponible");
+  h.run("syncBankCount(2);");
+  assert.notEqual(h.run("state.custom.accounts[1].id"), "bank-b");
+  assert.equal(h.run("getMovementBankId(state.custom.movements[0])"), "bank-b");
+  assert.equal(h.run("getMovementBankLabel(state.custom.movements[0])"), "Banco no disponible");
+  const reloaded = harness(h.saved());
+  assert.equal(reloaded.run("getMovementBankId(state.custom.movements[0])"), "bank-b");
+  assert.equal(reloaded.run("getMovementBankLabel(state.custom.movements[0], state.custom.accounts)"), "Banco no disponible");
+});
+
+test("R10: an orphan bank does not block individual status editing and can be explicitly cleared", () => {
+  const h = harness();
+  seed(h, [payment("p", h.day(-2), { bankId: "removed-bank" })]);
+  h.run('openMovementEditor(["p"]); els.editMovementStatus.value = "pending";');
+  assert.deepEqual(h.json("getMovementEditPatch()"), { status: "pending" });
+  h.run("updateMovementEditPreview();");
+  assert.equal(h.run("els.saveMovementEdit.disabled"), false);
+  h.run('commitMovementEdit(["p"], getMovementEditPatch(), "custom");');
+  assert.equal(h.run("getMovementBankId(state.custom.movements[0])"), "removed-bank");
+  assert.equal(h.run('commitMovementEdit(["p"], { bankId: "" }, "custom")'), 1);
+  assert.equal(h.run("getMovementBankId(state.custom.movements[0])"), "");
+});
+
+test("R10: payment bank controls are optional and mixed editors do not apply a bank", () => {
+  const h = harness();
+  seed(h, [payment("p1", h.day(1)), payment("p2", h.day(2), { bankId: "bank-test" }), movement("i", h.day(3))]);
+  h.run('openMovementEditor(["p1"]);');
+  assert.equal(h.run("els.editBankField.hidden"), false);
+  assert.equal(h.run("els.editBankEnabled.checked"), true);
+  assert.deepEqual(h.json("getMovementEditPatch()"), {});
+  h.run('openMovementEditor(["p1", "p2"]);');
+  assert.equal(h.run("els.editBankField.hidden"), false);
+  assert.equal(h.run("els.editBankEnabled.checked"), false);
+  assert.deepEqual(h.json("getMovementEditPatch()"), {});
+  h.run('openMovementEditor(["p1", "i"]);');
+  assert.equal(h.run("els.editBankField.hidden"), true);
+  assert.equal(h.run("els.editBankEnabled.checked"), false);
+  h.run('els.editStatusEnabled.checked = true; els.editMovementStatus.value = "pending";');
+  assert.deepEqual(h.json("getMovementEditPatch()"), { status: "pending" });
+});
+
+test("R10/R8: Enter and storage failure preserve a payment draft including its chosen bank", () => {
+  const h = harness();
+  seed(h, []);
+  paymentDraft(h, "bank-test");
+  let prevented = false;
+  h.run("handleCaptureKeydown(input)", { key: "Enter", target: new Element("INPUT"), isComposing: false, preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(h.run("els.movementBank.value"), "bank-test");
+  assert.equal(h.run("els.movementAmount.value"), "125.50");
+  h.storage.fail = true;
+  h.run("addMovement(input)", { preventDefault() {} });
+  assert.equal(h.run("els.movementBank.value"), "bank-test");
+  assert.equal(h.run("els.movementConcept.value"), "Pago sintético");
+  assert.deepEqual(h.json("state.custom.movements"), []);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("R10: assigning a bank respects the same atomic storage guarantee as date/status edits", () => {
+  const h = harness();
+  seed(h, [payment("p", h.day(1))]);
+  const before = h.json("state.custom");
+  h.storage.setItem(STORAGE_KEY, JSON.stringify(before));
+  h.storage.fail = true;
+  assert.throws(() => h.run('commitMovementEdit(["p"], { bankId: "bank-test" }, "custom")'));
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.deepEqual(h.saved(), before);
+});
+
+test("R10: demo bank edits are isolated and never persisted into personal data", () => {
+  const h = harness();
+  seed(h, [payment("personal", h.day(1))]);
+  const before = h.json("state.custom");
+  h.run('state.mode = "demo";');
+  assert.equal(h.run('commitMovementEdit(["d2"], { bankId: "demo-2" }, "demo")'), 1);
+  assert.equal(h.run('getMovementBankId(getActiveMovements().find(m => m.id === "d2"))'), "demo-2");
+  assert.equal(h.run('getMovementBankLabel(getActiveMovements().find(m => m.id === "d2"))'), "Institución Demo B");
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 0);
 });

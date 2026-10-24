@@ -168,6 +168,14 @@
                   <input id="movementAmount" type="number" min="0.01" step="0.01" placeholder="0.00" required />
                 </div>
 
+                <div class="field-group movement-bank-field" id="movementBankField" hidden>
+                  <label for="movementBank">Banco (opcional)</label>
+                  <select id="movementBank" aria-describedby="movementBankHelp">
+                    <option value="">Sin banco asignado</option>
+                  </select>
+                  <p class="movement-bank-help" id="movementBankHelp">Puedes guardar el pago sin asignar un banco.</p>
+                </div>
+
                 <button class="button button-primary movement-submit" id="addMovementButton" type="submit">Agregar movimiento</button>
               </form>
 
@@ -464,6 +472,17 @@
               <option value="confirmed">Confirmado</option>
               <option value="pending">Por confirmar</option>
             </select>
+          </div>
+          <div class="movement-edit-field movement-edit-bank-field" id="editBankField" hidden>
+            <label class="movement-edit-toggle" for="editBankEnabled">
+              <input class="movement-checkbox" id="editBankEnabled" type="checkbox" />
+              <span>Cambiar banco</span>
+            </label>
+            <label class="sr-only" for="editMovementBank">Banco (opcional)</label>
+            <select id="editMovementBank" aria-describedby="editBankHelp" disabled>
+              <option value="">Sin banco asignado</option>
+            </select>
+            <p class="movement-bank-help" id="editBankHelp">Elige Sin banco asignado para quitar la asignación.</p>
           </div>
         </div>
 
