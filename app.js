@@ -1,6 +1,14 @@
 "use strict";
 
 const STORAGE_KEY = "ivanTreasuryProjectionV2";
+const CATEGORY_OPTIONS = [
+  { id: "costos", label: "Costos" },
+  { id: "gastos", label: "Gastos" },
+  { id: "nomina", label: "Nómina" },
+  { id: "financieros", label: "Financieros" },
+  { id: "impuestos", label: "Impuestos" },
+  { id: "otros", label: "Otros" },
+];
 
 const demoAccounts = [
   { id: "demo-1", name: "Institución Demo A", balance: 2450000 },
@@ -37,6 +45,8 @@ const state = {
   movementFilters: createMovementFilters(),
   selectedMovementIds: new Set(),
   movementEdit: null,
+  bankRetirement: null,
+  undoDeletions: new Map(),
 };
 
 const els = {
@@ -63,6 +73,11 @@ const els = {
   movementAmount: document.querySelector("#movementAmount"),
   movementBankField: document.querySelector("#movementBankField"),
   movementBank: document.querySelector("#movementBank"),
+  movementCategoryField: document.querySelector("#movementCategoryField"),
+  movementCategory: document.querySelector("#movementCategory"),
+  transferFields: document.querySelector("#transferFields"),
+  transferFromBank: document.querySelector("#transferFromBank"),
+  transferToBank: document.querySelector("#transferToBank"),
   captureFeedback: document.querySelector("#captureFeedback"),
   capturedMovementCount: document.querySelector("#capturedMovementCount"),
   captureList: document.querySelector("#captureList"),
@@ -84,12 +99,19 @@ const els = {
   movementSearch: document.querySelector("#movementSearch"),
   movementTypeFilter: document.querySelector("#movementTypeFilter"),
   movementStatusFilter: document.querySelector("#movementStatusFilter"),
+  movementBankFilter: document.querySelector("#movementBankFilter"),
+  movementCategoryFilter: document.querySelector("#movementCategoryFilter"),
   movementScopeFilter: document.querySelector("#movementScopeFilter"),
   movementFromFilter: document.querySelector("#movementFromFilter"),
   movementToFilter: document.querySelector("#movementToFilter"),
   clearMovementFilters: document.querySelector("#clearMovementFilters"),
   selectAllMovements: document.querySelector("#selectAllMovements"),
   selectionSummary: document.querySelector("#selectionSummary"),
+  selectionTotals: document.querySelector("#selectionTotals"),
+  paymentGroups: document.querySelector("#paymentGroups"),
+  exportScope: document.querySelector("#exportScope"),
+  exportMovements: document.querySelector("#exportMovements"),
+  exportFeedback: document.querySelector("#exportFeedback"),
   editSelectedMovements: document.querySelector("#editSelectedMovements"),
   clearMovementSelection: document.querySelector("#clearMovementSelection"),
   movementTableHint: document.querySelector("#movementTableHint"),
@@ -106,6 +128,24 @@ const els = {
   editBankField: document.querySelector("#editBankField"),
   editBankEnabled: document.querySelector("#editBankEnabled"),
   editMovementBank: document.querySelector("#editMovementBank"),
+  editIndividualFields: document.querySelector("#editIndividualFields"),
+  editMovementConcept: document.querySelector("#editMovementConcept"),
+  editMovementAmount: document.querySelector("#editMovementAmount"),
+  editCategoryField: document.querySelector("#editCategoryField"),
+  editCategoryEnabled: document.querySelector("#editCategoryEnabled"),
+  editMovementCategory: document.querySelector("#editMovementCategory"),
+  editTransferFields: document.querySelector("#editTransferFields"),
+  editTransferFromBank: document.querySelector("#editTransferFromBank"),
+  editTransferToBank: document.querySelector("#editTransferToBank"),
+  addBankButton: document.querySelector("#addBankButton"),
+  bankRetireDialog: document.querySelector("#bankRetireDialog"),
+  bankRetireTitle: document.querySelector("#bankRetireTitle"),
+  bankRetireDescription: document.querySelector("#bankRetireDescription"),
+  bankRetireImpact: document.querySelector("#bankRetireImpact"),
+  bankRetireError: document.querySelector("#bankRetireError"),
+  cancelBankRetire: document.querySelector("#cancelBankRetire"),
+  confirmBankRetire: document.querySelector("#confirmBankRetire"),
+  undoToasts: document.querySelector("#undoToasts"),
   editMovementError: document.querySelector("#editMovementError"),
   editMovementPreview: document.querySelector("#editMovementPreview"),
   cancelMovementEdit: document.querySelector("#cancelMovementEdit"),
@@ -127,6 +167,10 @@ const currency = new Intl.NumberFormat("es-MX", {
   style: "currency",
   currency: "MXN",
   maximumFractionDigits: 0,
+});
+
+const detailCurrency = new Intl.NumberFormat("es-MX", {
+  style: "currency", currency: "MXN", minimumFractionDigits: 2, maximumFractionDigits: 2,
 });
 
 const compactCurrency = new Intl.NumberFormat("es-MX", {
@@ -229,10 +273,15 @@ function loadCustomState() {
           id: String(movement.id || createId("movement")),
           date: /^\d{4}-\d{2}-\d{2}$/.test(String(movement.date)) ? String(movement.date) : todayISO,
           concept: String(movement.concept || "Movimiento").slice(0, 70),
-          type: movement.type === "outflow" ? "outflow" : "inflow",
+          type: ["outflow", "transfer"].includes(movement.type) ? movement.type : "inflow",
           status: movement.status === "pending" ? "pending" : "confirmed",
           amount: toSafeNumber(movement.amount),
           ...(getMovementBankId(movement) ? { bankId: getMovementBankId(movement) } : {}),
+          ...(getMovementCategoryId(movement) ? { categoryId: getMovementCategoryId(movement) } : {}),
+          ...(movement.type === "transfer" ? {
+            fromBankId: typeof movement.fromBankId === "string" ? movement.fromBankId : "",
+            toBankId: typeof movement.toBankId === "string" ? movement.toBankId : "",
+          } : {}),
         }))
       : [];
 
@@ -274,6 +323,62 @@ function getMovementBankLabel(movement, accounts = getActiveAccounts()) {
   return accounts.find((account) => account.id === bankId)?.name || "Banco no disponible";
 }
 
+function getBankLabel(id, accounts = getActiveAccounts()) {
+  return accounts.find((account) => account.id === id)?.name || "Banco no disponible";
+}
+
+function getMovementCategoryId(movement) {
+  return movement.type === "outflow" && CATEGORY_OPTIONS.some((category) => category.id === movement.categoryId)
+    ? movement.categoryId : "";
+}
+
+function getMovementCategoryLabel(movement) {
+  return CATEGORY_OPTIONS.find((category) => category.id === getMovementCategoryId(movement))?.label || "Sin categoría";
+}
+
+function getMovementTypeLabel(movement) {
+  return { inflow: "Cobro", outflow: "Pago", transfer: "Traspaso" }[movement.type] || "Movimiento";
+}
+
+function getMovementAccountLabel(movement, accounts = getActiveAccounts()) {
+  if (movement.type === "transfer") return `${getBankLabel(movement.fromBankId, accounts)} → ${getBankLabel(movement.toBankId, accounts)}`;
+  return movement.type === "outflow" ? getMovementBankLabel(movement, accounts) : "";
+}
+
+function getMovementCashImpact(movement) {
+  return movement.type === "inflow" ? movement.amount : movement.type === "outflow" ? -movement.amount : 0;
+}
+
+function getAccountTransferNet(bankId, movements) {
+  return movements.reduce((total, movement) => movement.type !== "transfer" ? total
+    : total + (movement.toBankId === bankId ? movement.amount : 0) - (movement.fromBankId === bankId ? movement.amount : 0), 0);
+}
+
+function isValidMovementAmount(amount) {
+  return typeof amount === "number" && Number.isFinite(amount) && amount > 0
+    && Number.isSafeInteger(Math.round(amount * 100)) && Math.abs(amount * 100 - Math.round(amount * 100)) < 0.000001;
+}
+
+function validateTransfer(movement, accounts = getActiveAccounts()) {
+  const ids = [movement.fromBankId, movement.toBankId];
+  if (ids.some((id) => typeof id !== "string" || !id || accounts.filter((account) => account.id === id).length !== 1)) {
+    throw new Error("Elige dos cuentas disponibles para el traspaso.");
+  }
+  if (ids[0] === ids[1]) throw new Error("La cuenta de origen y la de destino deben ser diferentes.");
+}
+
+function renderCategoryOptions(select, value = "") {
+  select.innerHTML = '<option value="">Sin categoría</option>'
+    + CATEGORY_OPTIONS.map((category) => `<option value="${category.id}">${category.label}</option>`).join("");
+  select.value = CATEGORY_OPTIONS.some((category) => category.id === value) ? value : "";
+}
+
+function renderTransferOptions(select, accounts, value = "") {
+  select.innerHTML = '<option value="">Selecciona una cuenta</option>'
+    + accounts.map((account) => `<option value="${escapeHTML(account.id)}">${escapeHTML(account.name)}</option>`).join("");
+  select.value = accounts.some((account) => account.id === value) ? value : "";
+}
+
 function renderBankOptions(select, accounts, bankId = "", preserveUnavailable = false) {
   const available = accounts.some((account) => account.id === bankId);
   const selectedId = available || preserveUnavailable ? bankId : "";
@@ -285,9 +390,18 @@ function renderBankOptions(select, accounts, bankId = "", preserveUnavailable = 
 
 function renderCaptureBank() {
   const isPayment = els.movementType.value === "outflow";
+  const isTransfer = els.movementType.value === "transfer";
   els.movementBankField.hidden = !isPayment;
   els.movementBank.disabled = !isPayment;
   renderBankOptions(els.movementBank, state.custom.accounts, isPayment ? els.movementBank.value : "");
+  els.movementCategoryField.hidden = !isPayment;
+  els.movementCategory.disabled = !isPayment;
+  renderCategoryOptions(els.movementCategory, isPayment ? els.movementCategory.value : "");
+  els.transferFields.hidden = !isTransfer;
+  [els.transferFromBank, els.transferToBank].forEach((select) => {
+    select.disabled = !isTransfer;
+    renderTransferOptions(select, state.custom.accounts, isTransfer ? select.value : "");
+  });
 }
 
 function getActiveMovements() {
@@ -321,7 +435,16 @@ function getFilteredMovements() {
 
 // Table filters are deliberately separate from the forecast inputs above.
 function createMovementFilters() {
-  return { query: "", type: "all", status: "all", from: "", to: "", scope: "projection" };
+  return { query: "", type: "all", status: "all", from: "", to: "", scope: "projection", bank: "all", category: "all" };
+}
+
+function movementMatchesBank(movement, filter, accounts = getActiveAccounts()) {
+  if (!filter || filter === "all") return true;
+  const ids = movement.type === "transfer" ? [movement.fromBankId, movement.toBankId]
+    : movement.type === "outflow" ? [getMovementBankId(movement)] : [];
+  if (filter === "unassigned") return movement.type === "outflow" && !getMovementBankId(movement);
+  if (filter === "unavailable") return ids.some((id) => id && !accounts.some((account) => account.id === id));
+  return ids.includes(filter);
 }
 
 function getMovementFilterError() {
@@ -345,6 +468,9 @@ function getVisibleMovements() {
     && (!query || normalizeMovementSearch(movement.concept).includes(query))
     && (filters.type === "all" || movement.type === filters.type)
     && (filters.status === "all" || movement.status === filters.status)
+    && movementMatchesBank(movement, filters.bank)
+    && (!filters.category || filters.category === "all" || (movement.type === "outflow"
+      && getMovementCategoryId(movement) === (filters.category === "unassigned" ? "" : filters.category)))
     && (!filters.from || movement.date >= filters.from)
     && (!filters.to || movement.date <= filters.to)
   ).sort((a, b) => parseISODate(a.date) - parseISODate(b.date));
@@ -360,12 +486,44 @@ function updateMovementSelection() {
   els.selectAllMovements.indeterminate = count > 0 && count < visibleIds.size;
   els.selectAllMovements.disabled = visibleIds.size === 0;
   els.selectionSummary.textContent = `${count} ${count === 1 ? "movimiento seleccionado" : "movimientos seleccionados"}`;
+  const totals = getSelectionTotals(getActiveMovements().filter((movement) => state.selectedMovementIds.has(movement.id)));
+  els.selectionTotals.textContent = count
+    ? `Cobros ${detailCurrency.format(totals.inflows)} · Pagos ${detailCurrency.format(totals.outflows)} · Traspasos ${detailCurrency.format(totals.transfers)} · Neto ${detailCurrency.format(totals.net)}` : "";
   els.editSelectedMovements.disabled = count === 0;
   els.clearMovementSelection.disabled = count === 0;
   els.movementsTableBody.querySelectorAll("[data-select-movement]").forEach((checkbox) => {
     checkbox.checked = state.selectedMovementIds.has(checkbox.dataset.selectMovement);
     checkbox.closest("tr").classList.toggle("is-selected", checkbox.checked);
   });
+}
+
+function getSelectionTotals(movements) {
+  const totals = { count: movements.length, inflows: 0, outflows: 0, transfers: 0, net: 0 };
+  movements.forEach((movement) => {
+    if (movement.type === "inflow") totals.inflows += movement.amount;
+    else if (movement.type === "outflow") totals.outflows += movement.amount;
+    else if (movement.type === "transfer") totals.transfers += movement.amount;
+  });
+  totals.net = totals.inflows - totals.outflows;
+  return totals;
+}
+
+function getPaymentGroups(movements = getVisibleMovements()) {
+  return [...CATEGORY_OPTIONS, { id: "", label: "Sin categoría" }].map((category) => {
+    const entries = movements.filter((movement) => movement.type === "outflow" && getMovementCategoryId(movement) === category.id);
+    return { ...category, movements: entries, total: entries.reduce((sum, movement) => sum + movement.amount, 0) };
+  }).filter((group) => group.movements.length || group.id === "");
+}
+
+function renderPaymentGroups() {
+  els.paymentGroups.innerHTML = getPaymentGroups().map((group) => `
+    <details class="payment-category" ${group.id === "" ? "open" : ""}>
+      <summary class="category-heading"><strong>${group.label}</strong><span>${group.movements.length} ${group.movements.length === 1 ? "pago" : "pagos"}</span><strong>${detailCurrency.format(group.total)}</strong></summary>
+      ${group.movements.length ? group.movements.map((movement) => `<div class="category-payment">
+        <div><strong>${escapeHTML(movement.concept)}</strong><small>${shortDate.format(parseISODate(movement.date))} · ${escapeHTML(getMovementBankLabel(movement))}</small></div>
+        <span class="amount-out">${detailCurrency.format(movement.amount)}</span>
+      </div>`).join("") : '<p class="category-empty">No hay pagos sin categoría con estos filtros.</p>'}
+    </details>`).join("");
 }
 
 function clearMovementSelection() {
@@ -381,6 +539,19 @@ function syncMovementFilterControls() {
   els.movementScopeFilter.value = filters.scope;
   els.movementFromFilter.value = filters.from;
   els.movementToFilter.value = filters.to;
+  renderMovementFilterOptions();
+}
+
+function renderMovementFilterOptions() {
+  els.movementBankFilter.innerHTML = '<option value="all">Todos los bancos</option><option value="unassigned">Pagos sin banco</option><option value="unavailable">Banco no disponible</option>'
+    + getActiveAccounts().map((account) => `<option value="${escapeHTML(account.id)}">${escapeHTML(account.name)}</option>`).join("");
+  const bank = state.movementFilters.bank || "all";
+  const validBank = ["all", "unassigned", "unavailable"].includes(bank) || getActiveAccounts().some((account) => account.id === bank);
+  state.movementFilters.bank = validBank ? bank : "all";
+  els.movementBankFilter.value = state.movementFilters.bank;
+  els.movementCategoryFilter.innerHTML = '<option value="all">Todas las categorías</option><option value="unassigned">Sin categoría</option>'
+    + CATEGORY_OPTIONS.map((category) => `<option value="${category.id}">${category.label}</option>`).join("");
+  els.movementCategoryFilter.value = state.movementFilters.category || "all";
 }
 
 function prepareMovementEdit(movements, ids, patch, accounts = getActiveAccounts()) {
@@ -388,8 +559,22 @@ function prepareMovementEdit(movements, ids, patch, accounts = getActiveAccounts
     throw new Error("Selecciona movimientos únicos antes de editar.");
   }
   const fields = patch && typeof patch === "object" ? Object.keys(patch) : [];
-  if (fields.length === 0 || fields.some((field) => !["date", "status", "bankId"].includes(field))) {
-    throw new Error("Elige cambiar fecha, estatus o banco en los pagos.");
+  const allowed = ["date", "status", "bankId", "categoryId", "concept", "amount", "fromBankId", "toBankId"];
+  if (fields.length === 0 || fields.some((field) => !allowed.includes(field))) {
+    throw new Error("Elige los campos y los nuevos valores que quieres cambiar.");
+  }
+  if (ids.length !== 1 && fields.some((field) => ["concept", "amount", "fromBankId", "toBankId"].includes(field))) {
+    throw new Error("El concepto, importe y las cuentas de un traspaso solo se editan individualmente.");
+  }
+  const changes = { ...patch };
+  if (fields.includes("concept")) {
+    if (typeof patch.concept !== "string" || !patch.concept.trim() || patch.concept.trim().length > 70) {
+      throw new Error("Escribe un concepto de 1 a 70 caracteres.");
+    }
+    changes.concept = patch.concept.trim();
+  }
+  if (fields.includes("amount") && !isValidMovementAmount(patch.amount)) {
+    throw new Error("El importe debe ser mayor a cero y tener como máximo dos decimales.");
   }
   if (fields.includes("date") && (!isValidISODate(patch.date) || patch.date < todayISO)) {
     throw new Error("La nueva fecha debe ser válida y no puede ser anterior a hoy.");
@@ -413,12 +598,27 @@ function prepareMovementEdit(movements, ids, patch, accounts = getActiveAccounts
       throw new Error("Elige un banco disponible o Sin banco asignado.");
     }
   }
+  if (fields.includes("categoryId")) {
+    if (movements.some((movement) => selected.has(movement.id) && movement.type !== "outflow")) {
+      throw new Error("Para cambiar la categoría, selecciona únicamente pagos.");
+    }
+    if (typeof patch.categoryId !== "string" || (patch.categoryId && !CATEGORY_OPTIONS.some((category) => category.id === patch.categoryId))) {
+      throw new Error("Elige una categoría disponible o Sin categoría.");
+    }
+  }
+  if (fields.some((field) => ["fromBankId", "toBankId"].includes(field))
+    && movements.some((movement) => selected.has(movement.id) && movement.type !== "transfer")) {
+    throw new Error("Las cuentas de origen y destino solo corresponden a traspasos.");
+  }
+  movements.filter((movement) => selected.has(movement.id) && movement.type === "transfer").forEach((movement) => {
+    if (fields.some((field) => ["date", "amount", "fromBankId", "toBankId"].includes(field))) validateTransfer({ ...movement, ...changes }, accounts);
+  });
   let changedCount = 0;
   const updated = movements.map((movement) => {
     if (!selected.has(movement.id) || !fields.some((field) =>
-      (field === "bankId" ? getMovementBankId(movement) : movement[field]) !== patch[field])) return movement;
+      (field === "bankId" ? getMovementBankId(movement) : field === "categoryId" ? getMovementCategoryId(movement) : movement[field]) !== changes[field])) return movement;
     changedCount += 1;
-    return { ...movement, ...patch };
+    return { ...movement, ...changes };
   });
   return { movements: updated, changedCount };
 }
@@ -438,7 +638,10 @@ function commitMovementEdit(ids, patch, mode) {
         state.demoEdits.set(movement.id, {
           date: movement.date,
           status: movement.status,
-          ...(movement.type === "outflow" ? { bankId: getMovementBankId(movement) } : {}),
+          concept: movement.concept,
+          amount: movement.amount,
+          ...(movement.type === "outflow" ? { bankId: getMovementBankId(movement), categoryId: getMovementCategoryId(movement) } : {}),
+          ...(movement.type === "transfer" ? { fromBankId: movement.fromBankId, toBankId: movement.toBankId } : {}),
         });
       }
     });
@@ -452,10 +655,20 @@ function getMovementEditPatch() {
   if (els.editDateEnabled.checked) patch.date = els.editMovementDate.value;
   if (els.editStatusEnabled.checked) patch.status = els.editMovementStatus.value;
   if (!els.editBankEnabled.disabled && els.editBankEnabled.checked) patch.bankId = els.editMovementBank.value;
+  if (!els.editCategoryEnabled.disabled && els.editCategoryEnabled.checked) patch.categoryId = els.editMovementCategory.value;
+  if (edit && edit.ids.length === 1) {
+    patch.concept = els.editMovementConcept.value.trim();
+    patch.amount = Number(els.editMovementAmount.value);
+    if (edit.original[0].type === "transfer") {
+      patch.fromBankId = els.editTransferFromBank.value;
+      patch.toBankId = els.editTransferToBank.value;
+    }
+  }
   // An unchanged historical date must not block an individual status edit.
   if (edit && edit.ids.length === 1) {
     Object.keys(patch).forEach((field) => {
-      const original = field === "bankId" ? getMovementBankId(edit.original[0]) : edit.original[0][field];
+      const original = field === "bankId" ? getMovementBankId(edit.original[0])
+        : field === "categoryId" ? getMovementCategoryId(edit.original[0]) : edit.original[0][field];
       if (patch[field] === original) delete patch[field];
     });
   }
@@ -466,6 +679,7 @@ function updateMovementEditPreview() {
   els.editMovementDate.disabled = !els.editDateEnabled.checked;
   els.editMovementStatus.disabled = !els.editStatusEnabled.checked;
   els.editMovementBank.disabled = els.editBankEnabled.disabled || !els.editBankEnabled.checked;
+  els.editMovementCategory.disabled = els.editCategoryEnabled.disabled || !els.editCategoryEnabled.checked;
   els.editMovementError.textContent = "";
   els.saveMovementEdit.disabled = true;
   if (!state.movementEdit) return;
@@ -476,8 +690,8 @@ function updateMovementEditPreview() {
   }
   try {
     const result = prepareMovementEdit(getActiveMovements(), state.movementEdit.ids, patch, getActiveAccounts());
-    const fieldLabels = { date: "fecha", status: "estatus", bankId: "banco" };
-    const fields = Object.keys(patch).map((field) => fieldLabels[field]).join(" y ");
+    const fieldLabels = { date: "fecha", status: "estatus", bankId: "banco", categoryId: "categoría", concept: "concepto", amount: "importe", fromBankId: "cuenta de origen", toBankId: "cuenta de destino" };
+    const fields = Object.keys(patch).map((field) => fieldLabels[field]).join(", ");
     els.editMovementPreview.textContent = result.changedCount
       ? `Se aplicarán los cambios de ${fields} a ${result.changedCount} de ${state.movementEdit.ids.length} movimientos seleccionados.`
       : "Los movimientos ya tienen los valores indicados.";
@@ -506,19 +720,34 @@ function openMovementEditor(ids, opener = document.activeElement) {
   const onlyPayments = movements.every((movement) => movement.type === "outflow");
   els.movementEditTitle.textContent = single ? "Editar movimiento" : `Editar ${ids.length} movimientos`;
   els.movementEditDescription.textContent = single
-    ? `${first.concept} · ${currency.format(first.amount)}. Cambia su ${onlyPayments ? "fecha, estatus o banco" : "fecha o estatus"}.`
+    ? `${getMovementTypeLabel(first)} · ${detailCurrency.format(first.amount)}. Corrige los datos y revisa los cambios antes de guardar.`
     : `Los nuevos valores se aplicarán a los ${ids.length} movimientos seleccionados.`;
   els.editDateEnabled.checked = single;
   els.editStatusEnabled.checked = single;
   els.editBankField.hidden = !onlyPayments;
   els.editBankEnabled.disabled = !onlyPayments;
   els.editBankEnabled.checked = single && onlyPayments;
+  els.editCategoryField.hidden = !onlyPayments;
+  els.editCategoryEnabled.disabled = !onlyPayments;
+  els.editCategoryEnabled.checked = single && onlyPayments;
+  els.editIndividualFields.hidden = !single;
+  els.editMovementConcept.disabled = !single;
+  els.editMovementAmount.disabled = !single;
+  els.editMovementConcept.value = single ? first.concept : "";
+  els.editMovementAmount.value = single ? String(first.amount) : "";
+  const isTransfer = single && first.type === "transfer";
+  els.editTransferFields.hidden = !isTransfer;
+  [els.editTransferFromBank, els.editTransferToBank].forEach((select) => { select.disabled = !isTransfer; });
+  renderTransferOptions(els.editTransferFromBank, getActiveAccounts(), isTransfer ? first.fromBankId : "");
+  renderTransferOptions(els.editTransferToBank, getActiveAccounts(), isTransfer ? first.toBankId : "");
   els.editMovementDate.min = todayISO;
   els.editMovementDate.value = movements.every((movement) => movement.date === first.date) ? first.date : todayISO;
   els.editMovementStatus.value = movements.every((movement) => movement.status === first.status) ? first.status : "confirmed";
   const bankId = getMovementBankId(first);
   const commonBankId = onlyPayments && movements.every((movement) => getMovementBankId(movement) === bankId) ? bankId : "";
   renderBankOptions(els.editMovementBank, getActiveAccounts(), commonBankId, true);
+  const categoryId = getMovementCategoryId(first);
+  renderCategoryOptions(els.editMovementCategory, onlyPayments && movements.every((movement) => getMovementCategoryId(movement) === categoryId) ? categoryId : "");
   updateMovementEditPreview();
   els.movementEditDialog.showModal();
   (single ? els.editMovementDate : els.editDateEnabled).focus();
@@ -580,7 +809,7 @@ function getPeriodTotals(filteredMovements) {
       if (movement.type === "inflow") {
         totals.inflows += movement.amount;
         totals.inflowCount += 1;
-      } else {
+      } else if (movement.type === "outflow") {
         totals.outflows += movement.amount;
         totals.outflowCount += 1;
       }
@@ -605,14 +834,14 @@ function getForecastSeries(filteredMovements, startingBalance) {
 
   const dayZeroMovements = movementMap.get(0) ?? [];
   dayZeroMovements.forEach((movement) => {
-    runningBalance += movement.type === "inflow" ? movement.amount : -movement.amount;
+    runningBalance += getMovementCashImpact(movement);
   });
   series[0].balance = runningBalance;
 
   for (let day = 1; day <= state.horizon; day += 1) {
     const dayMovements = movementMap.get(day) ?? [];
     dayMovements.forEach((movement) => {
-      runningBalance += movement.type === "inflow" ? movement.amount : -movement.amount;
+      runningBalance += getMovementCashImpact(movement);
     });
 
     series.push({
@@ -628,6 +857,7 @@ function getForecastSeries(filteredMovements, startingBalance) {
 
 function setMode(mode, options = {}) {
   if (els.movementEditDialog.open) els.movementEditDialog.close();
+  if (els.bankRetireDialog.open) els.bankRetireDialog.close();
   state.mode = mode;
   state.selectedMovementIds.clear();
   state.movementFilters = createMovementFilters();
@@ -684,23 +914,81 @@ function syncBankCount(newCount) {
       });
     }
   } else if (safeCount < currentAccounts.length) {
-    currentAccounts.length = safeCount;
+    throw new Error("Usa Retirar en el banco que quieras quitar para revisar sus movimientos vinculados.");
   }
 
-  state.custom.accounts = currentAccounts;
+  persistCustomCandidate({ ...state.custom, accounts: currentAccounts });
   els.bankCount.value = String(safeCount);
-  saveCustomState();
   renderBuilder();
   renderDashboard();
 }
 
+function getBankRemovalImpact(bankId) {
+  const accounts = state.custom.accounts.filter((account) => account.id === bankId);
+  if (accounts.length !== 1) throw new Error("No se puede identificar este banco de forma única.");
+  const transfers = state.custom.movements.filter((movement) => movement.type === "transfer"
+    && [movement.fromBankId, movement.toBankId].includes(bankId));
+  return {
+    account: accounts[0],
+    paymentCount: state.custom.movements.filter((movement) => movement.type === "outflow" && getMovementBankId(movement) === bankId).length,
+    transferCount: transfers.length,
+    transferAmount: transfers.reduce((sum, movement) => sum + movement.amount, 0),
+  };
+}
+
+function commitBankRemoval(bankId) {
+  if (state.mode !== "custom") throw new Error("Solo puedes retirar bancos de tu proyección.");
+  const impact = getBankRemovalImpact(bankId);
+  if (state.custom.accounts.length <= 1) throw new Error("Conserva al menos un banco en tu proyección.");
+  if (impact.transferCount) throw new Error("Reasigna o elimina los traspasos vinculados antes de retirar este banco.");
+  persistCustomCandidate({ ...state.custom, accounts: state.custom.accounts.filter((account) => account.id !== bankId) });
+  return impact;
+}
+
+function openBankRetirement(bankId, opener = document.activeElement) {
+  try {
+    const impact = getBankRemovalImpact(bankId);
+    state.bankRetirement = { bankId, opener };
+    els.bankRetireTitle.textContent = `Retirar ${impact.account.name}`;
+    els.bankRetireDescription.textContent = "Revisa el saldo y todos los movimientos vinculados antes de retirar el banco.";
+    els.bankRetireImpact.innerHTML = `<dl class="bank-retire-impact-list">
+      <div><dt>Saldo inicial</dt><dd>${detailCurrency.format(impact.account.balance)}</dd></div>
+      <div><dt>Traspasos vinculados</dt><dd>${impact.transferCount} · ${detailCurrency.format(impact.transferAmount)}</dd></div>
+      <div><dt>Pagos asignados</dt><dd>${impact.paymentCount}</dd></div></dl>
+      <p>Los pagos se conservarán como Banco no disponible y podrás reasignarlos.</p>`;
+    els.bankRetireError.textContent = state.custom.accounts.length <= 1 ? "Conserva al menos un banco en tu proyección."
+      : impact.transferCount ? "Reasigna o elimina los traspasos vinculados antes de retirar este banco." : "";
+    els.confirmBankRetire.disabled = Boolean(els.bankRetireError.textContent);
+    els.bankRetireDialog.showModal();
+    els.cancelBankRetire.focus();
+  } catch (error) {
+    els.captureFeedback.textContent = error.message;
+  }
+}
+
+function submitBankRetirement() {
+  if (!state.bankRetirement) return;
+  try {
+    const impact = commitBankRemoval(state.bankRetirement.bankId);
+    els.bankRetireDialog.close();
+    renderBuilder();
+    renderDashboard();
+    els.captureFeedback.textContent = `${impact.account.name} retirado. Sus pagos se conservaron.`;
+    els.addBankButton.focus();
+  } catch (error) {
+    els.bankRetireError.textContent = error.message;
+  }
+}
+
 function renderBanksEditor() {
   els.bankCount.value = String(state.custom.accounts.length);
+  els.addBankButton.disabled = state.custom.accounts.length >= 10;
   els.banksEditor.innerHTML = state.custom.accounts
     .map(
       (account, index) => `
         <div class="bank-row" data-bank-id="${escapeHTML(account.id)}">
           <span class="bank-row-number">BANCO ${index + 1}</span>
+          <button class="bank-retire-button" type="button" data-retire-bank="${escapeHTML(account.id)}" aria-label="Retirar ${escapeHTML(account.name)}">Retirar</button>
           <div class="field-group">
             <label for="bank-name-${index}">Nombre</label>
             <input
@@ -727,7 +1015,7 @@ function renderBanksEditor() {
     )
     .join("");
 
-  els.initialTotal.textContent = currency.format(getAvailableBalance(state.custom.accounts));
+  els.initialTotal.textContent = detailCurrency.format(getAvailableBalance(state.custom.accounts));
 }
 
 function renderCaptureList() {
@@ -742,16 +1030,19 @@ function renderCaptureList() {
   els.captureList.innerHTML = movements
     .map((movement) => {
       const isInflow = movement.type === "inflow";
-      const typeLabel = isInflow ? "Cobro" : "Pago";
+      const isTransfer = movement.type === "transfer";
+      const typeLabel = getMovementTypeLabel(movement);
       const statusLabel = movement.status === "pending" ? "Por confirmar" : "Confirmado";
+      const accountLabel = getMovementAccountLabel(movement, state.custom.accounts);
+      const categoryLabel = movement.type === "outflow" ? getMovementCategoryLabel(movement) : "";
       return `
         <div class="capture-item" data-movement-id="${escapeHTML(movement.id)}">
           <div>
             <strong>${escapeHTML(movement.concept)}</strong>
-            <small>${shortDate.format(parseISODate(movement.date))} · ${typeLabel} · ${statusLabel}${isInflow ? "" : ` · ${escapeHTML(getMovementBankLabel(movement, state.custom.accounts))}`}</small>
+            <small>${shortDate.format(parseISODate(movement.date))} · ${typeLabel} · ${statusLabel}${accountLabel ? ` · ${escapeHTML(accountLabel)}` : ""}${categoryLabel ? ` · ${categoryLabel}` : ""}</small>
           </div>
-          <span class="capture-amount ${isInflow ? "amount-in" : "amount-out"}">
-            ${isInflow ? "+" : "−"}${currency.format(movement.amount)}
+          <span class="capture-amount ${isTransfer ? "amount-transfer" : isInflow ? "amount-in" : "amount-out"}">
+            ${isTransfer ? "↔ " : isInflow ? "+" : "−"}${detailCurrency.format(movement.amount)}
           </span>
           <div class="capture-item-actions">
             <button class="capture-edit-button" type="button"
@@ -779,13 +1070,13 @@ function renderBuilder() {
   renderCaptureList();
 }
 
-function renderAccounts(accounts) {
+function renderAccounts(accounts, movements = getFilteredMovements()) {
   const total = getAvailableBalance(accounts);
 
   if (accounts.length === 0) {
     els.accountsTableBody.innerHTML = `
       <tr class="empty-state">
-        <td colspan="3">No hay bancos registrados.</td>
+        <td colspan="5">No hay bancos registrados.</td>
       </tr>
     `;
     return;
@@ -794,14 +1085,18 @@ function renderAccounts(accounts) {
   els.accountsTableBody.innerHTML = accounts
     .map((account) => {
       const share = total > 0 ? account.balance / total : 0;
+      const transferNet = getAccountTransferNet(account.id, movements);
+      const afterTransfers = account.balance + transferNet;
       return `
-        <tr>
-          <td><span class="account-name">${escapeHTML(account.name)}</span></td>
-          <td class="align-right amount">${currency.format(account.balance)}</td>
-          <td class="align-right account-share">${new Intl.NumberFormat("es-MX", {
+        <tr role="row">
+          <td role="cell" data-label="Banco"><span class="account-name">${escapeHTML(account.name)}</span></td>
+          <td role="cell" data-label="Saldo inicial" class="align-right amount">${detailCurrency.format(account.balance)}</td>
+          <td role="cell" data-label="Participación" class="align-right account-share">${new Intl.NumberFormat("es-MX", {
             style: "percent",
             maximumFractionDigits: 1,
           }).format(share)}</td>
+          <td role="cell" data-label="Traspasos netos" class="align-right amount">${detailCurrency.format(transferNet)}</td>
+          <td role="cell" data-label="Saldo tras traspasos" class="align-right amount ${afterTransfers < 0 ? "amount-out" : ""}">${detailCurrency.format(afterTransfers)}</td>
         </tr>
       `;
     })
@@ -824,7 +1119,7 @@ function renderKpis(accounts, filteredMovements, totals, forecastSeries) {
 
   const pendingIncluded = filteredMovements.filter((movement) => movement.status === "pending");
   const pendingNet = pendingIncluded.reduce(
-    (sum, movement) => sum + (movement.type === "inflow" ? movement.amount : -movement.amount),
+    (sum, movement) => sum + getMovementCashImpact(movement),
     0,
   );
 
@@ -859,7 +1154,9 @@ function renderInsights(filteredMovements, forecastSeries) {
 }
 
 function renderMovements() {
+  renderMovementFilterOptions();
   const filteredMovements = getVisibleMovements();
+  renderPaymentGroups();
   els.movementFilterFeedback.textContent = getMovementFilterError();
   els.movementTableHint.textContent = "Haz doble clic en una fila o usa Editar. Los filtros afectan solo esta tabla; los indicadores mantienen la proyección actual. "
     + (state.mode === "demo" ? "Los cambios del ejemplo son temporales y se restablecen al recargar." : "Tus cambios se guardan solo en este navegador.");
@@ -877,25 +1174,26 @@ function renderMovements() {
   els.movementsTableBody.innerHTML = filteredMovements
     .map((movement) => {
       const isInflow = movement.type === "inflow";
-      const amountSign = isInflow ? "+" : "−";
+      const isTransfer = movement.type === "transfer";
+      const amountSign = isTransfer ? "↔ " : isInflow ? "+" : "−";
       const statusLabel = movement.status === "confirmed" ? "Confirmado" : "Por confirmar";
       const statusClass = movement.status === "confirmed" ? "status-confirmed" : "status-pending";
 
       return `
-        <tr data-movement-id="${escapeHTML(movement.id)}" title="Doble clic para editar movimiento">
-          <td class="movement-selection-cell"><input class="movement-checkbox" type="checkbox"
+        <tr role="row" data-movement-id="${escapeHTML(movement.id)}" title="Doble clic para editar movimiento">
+          <td role="cell" class="movement-selection-cell"><input class="movement-checkbox" type="checkbox"
             data-select-movement="${escapeHTML(movement.id)}"
             aria-label="Seleccionar ${escapeHTML(movement.concept)} del ${escapeHTML(movement.date)}" /></td>
-          <td>${shortDate.format(parseISODate(movement.date))}</td>
-          <td><span class="movement-concept">${escapeHTML(movement.concept)}</span>${isInflow ? "" : `<small class="movement-bank">${escapeHTML(getMovementBankLabel(movement))}</small>`}</td>
-          <td>${isInflow ? "Cobro" : "Pago"}</td>
-          <td><span class="status ${statusClass}">${statusLabel}</span></td>
-          <td class="align-right amount ${isInflow ? "amount-in" : "amount-out"}">
-            ${amountSign}${currency.format(movement.amount)}
+          <td role="cell" data-label="Fecha">${shortDate.format(parseISODate(movement.date))}</td>
+          <td role="cell" data-label="Concepto" class="movement-concept-cell"><span class="movement-concept">${escapeHTML(movement.concept)}</span>${isInflow ? "" : `<small class="movement-bank">${escapeHTML(getMovementAccountLabel(movement))}</small>`}${movement.type === "outflow" ? `<small class="movement-category">${getMovementCategoryLabel(movement)}</small>` : ""}</td>
+          <td role="cell" data-label="Tipo">${getMovementTypeLabel(movement)}</td>
+          <td role="cell" data-label="Estatus"><span class="status ${statusClass}">${statusLabel}</span></td>
+          <td role="cell" data-label="Importe" class="align-right amount ${isTransfer ? "amount-transfer" : isInflow ? "amount-in" : "amount-out"}">
+            ${amountSign}${detailCurrency.format(movement.amount)}
           </td>
-          <td class="movement-row-actions"><button type="button" class="movement-edit-button"
+          <td role="cell" data-label="Acciones" class="movement-row-actions"><button type="button" class="movement-edit-button"
             data-edit-movement="${escapeHTML(movement.id)}"
-            aria-label="Editar ${escapeHTML(movement.concept)}">Editar</button></td>
+            aria-label="Editar ${escapeHTML(movement.concept)}">Editar</button>${state.mode === "custom" ? `<button type="button" class="movement-delete-button" data-delete-movement="${escapeHTML(movement.id)}" aria-label="Eliminar ${escapeHTML(movement.concept)}">Eliminar</button>` : ""}</td>
         </tr>
       `;
     })
@@ -1230,11 +1528,12 @@ function addMovement(event) {
   const concept = els.movementConcept.value.trim();
   const amount = Number(els.movementAmount.value);
   const date = els.movementDate.value;
-  const type = els.movementType.value === "outflow" ? "outflow" : "inflow";
+  const type = ["outflow", "transfer"].includes(els.movementType.value) ? els.movementType.value : "inflow";
   const bankId = type === "outflow" ? els.movementBank.value : "";
+  const categoryId = type === "outflow" ? els.movementCategory.value : "";
 
-  if (!concept || !isValidISODate(date) || !Number.isFinite(amount) || amount <= 0) {
-    els.captureFeedback.textContent = "Completa la fecha, el concepto y un importe mayor a cero.";
+  if (!concept || concept.length > 70 || !isValidISODate(date) || !isValidMovementAmount(amount)) {
+    els.captureFeedback.textContent = "Completa una fecha válida, un concepto de hasta 70 caracteres y un importe mayor a cero con máximo dos decimales.";
     return;
   }
 
@@ -1247,6 +1546,10 @@ function addMovement(event) {
     els.captureFeedback.textContent = "Elige un banco disponible o Sin banco asignado.";
     return;
   }
+  if (categoryId && !CATEGORY_OPTIONS.some((category) => category.id === categoryId)) {
+    els.captureFeedback.textContent = "Elige una categoría disponible o Sin categoría.";
+    return;
+  }
 
   const movement = {
     id: createId("movement"),
@@ -1256,8 +1559,11 @@ function addMovement(event) {
     status: els.movementStatus.value === "pending" ? "pending" : "confirmed",
     amount,
     ...(bankId ? { bankId } : {}),
+    ...(categoryId ? { categoryId } : {}),
+    ...(type === "transfer" ? { fromBankId: els.transferFromBank.value, toBankId: els.transferToBank.value } : {}),
   };
   try {
+    if (type === "transfer") validateTransfer(movement, state.custom.accounts);
     persistCustomCandidate({ ...state.custom, movements: [...state.custom.movements, movement] });
   } catch (error) {
     els.captureFeedback.textContent = error.message;
@@ -1269,16 +1575,109 @@ function addMovement(event) {
   els.movementType.value = "inflow";
   els.movementStatus.value = "confirmed";
   els.movementBank.value = "";
+  els.movementCategory.value = "";
+  els.transferFromBank.value = "";
+  els.transferToBank.value = "";
   renderBuilder();
   renderDashboard();
   els.movementConcept.focus();
 }
 
 function deleteMovement(id) {
-  state.custom.movements = state.custom.movements.filter((movement) => movement.id !== id);
-  saveCustomState();
+  if (state.mode !== "custom") throw new Error("Solo puedes eliminar movimientos de tu proyección.");
+  const matches = state.custom.movements.filter((movement) => movement.id === id);
+  if (matches.length !== 1) throw new Error("No se puede identificar este movimiento de forma única.");
+  const index = state.custom.movements.findIndex((movement) => movement.id === id);
+  const movement = { ...matches[0] };
+  persistCustomCandidate({ ...state.custom, movements: state.custom.movements.filter((entry) => entry.id !== id) });
+  const token = createId("undo");
+  const entry = { movement, index, expiresAt: Date.now() + 5000 };
+  state.undoDeletions.set(token, entry);
+  entry.timer = setTimeout(() => expireUndoDeletion(token), 5000);
+  state.selectedMovementIds.delete(id);
   renderBuilder();
   renderDashboard();
+  renderUndoToasts();
+  return token;
+}
+
+function renderUndoToasts() {
+  const focusedToken = document.activeElement?.dataset?.undoDelete;
+  els.undoToasts.innerHTML = [...state.undoDeletions.entries()].map(([token, entry]) => `<div class="undo-toast" role="status">
+    <div class="undo-toast-copy"><strong>Movimiento eliminado</strong><span>${escapeHTML(entry.movement.concept)}</span><small>Puedes deshacer durante 5 segundos.</small></div>
+    <button type="button" data-undo-delete="${escapeHTML(token)}" aria-label="Deshacer eliminación de ${escapeHTML(entry.movement.concept)}">Deshacer</button>
+  </div>`).join("");
+  if (focusedToken) {
+    [...els.undoToasts.querySelectorAll("[data-undo-delete]")]
+      .find((button) => button.dataset.undoDelete === focusedToken)?.focus();
+  }
+}
+
+function expireUndoDeletion(token) {
+  const entry = state.undoDeletions.get(token);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  const wasFocused = document.activeElement?.dataset?.undoDelete === token;
+  state.undoDeletions.delete(token);
+  renderUndoToasts();
+  if (wasFocused) els.movementSearch.focus();
+}
+
+function undoDeleteMovement(token, now = Date.now()) {
+  const entry = state.undoDeletions.get(token);
+  if (!entry) throw new Error("El plazo para deshacer esta eliminación terminó.");
+  if (now >= entry.expiresAt) {
+    expireUndoDeletion(token);
+    throw new Error("El plazo de 5 segundos para deshacer terminó.");
+  }
+  if (state.custom.movements.some((movement) => movement.id === entry.movement.id)) {
+    throw new Error("Ya existe un movimiento con ese identificador. No se restauró otro registro.");
+  }
+  if (entry.movement.type === "transfer") validateTransfer(entry.movement, state.custom.accounts);
+  const movements = [...state.custom.movements];
+  movements.splice(Math.min(entry.index, movements.length), 0, entry.movement);
+  persistCustomCandidate({ ...state.custom, movements });
+  expireUndoDeletion(token);
+  renderBuilder();
+  renderDashboard();
+  els.movementFeedback.textContent = "Movimiento restaurado.";
+  return entry.movement;
+}
+
+function getExportRows(scope = "visible") {
+  const movements = scope === "all" ? getActiveMovements()
+    : scope === "selected" ? getVisibleMovements().filter((movement) => state.selectedMovementIds.has(movement.id))
+      : getVisibleMovements();
+  return [...movements].sort((a, b) => a.date.localeCompare(b.date)).map((movement) => ({
+    id: movement.id, date: movement.date, concept: movement.concept,
+    type: getMovementTypeLabel(movement), status: movement.status === "pending" ? "Por confirmar" : "Confirmado",
+    amount: movement.amount,
+    bank: movement.type === "outflow" ? getMovementBankLabel(movement) : "",
+    category: movement.type === "outflow" ? getMovementCategoryLabel(movement) : "",
+    fromBank: movement.type === "transfer" ? getBankLabel(movement.fromBankId) : "",
+    toBank: movement.type === "transfer" ? getBankLabel(movement.toBankId) : "",
+  }));
+}
+
+function exportMovementsToExcel() {
+  els.exportFeedback.textContent = "";
+  try {
+    updateMovementSelection();
+    const rows = getExportRows(els.exportScope.value || "visible");
+    if (!rows.length) throw new Error("No hay movimientos en el alcance elegido para exportar.");
+    const bytes = TreasuryExcel.buildWorkbook(rows);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `movimientos-tesoreria-${todayISO}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    els.exportFeedback.textContent = `${rows.length} movimientos exportados a Excel.`;
+  } catch (error) {
+    els.exportFeedback.textContent = error.message || "No se pudo exportar el archivo.";
+  }
 }
 
 function resetCustomProjection() {
@@ -1287,9 +1686,16 @@ function resetCustomProjection() {
     return;
   }
 
-  state.custom = createDefaultCustomState();
+  const resetState = createDefaultCustomState();
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (error) {
+    els.captureFeedback.textContent = "No se pudo restablecer la proyección en este navegador. Tus datos no se modificaron. Revisa los permisos de almacenamiento e intenta de nuevo.";
+    return;
+  }
+  state.custom = resetState;
   state.selectedMovementIds.clear();
-  localStorage.removeItem(STORAGE_KEY);
+  [...state.undoDeletions.keys()].forEach(expireUndoDeletion);
   els.captureFeedback.textContent = "La proyección volvió a cero.";
   renderBuilder();
   renderDashboard();
@@ -1323,6 +1729,21 @@ function bindEvents() {
   els.chartScaleZero.addEventListener("click", () => setChartScaleMode("zero"));
 
   els.bankCount.addEventListener("change", (event) => syncBankCount(event.target.value));
+  els.addBankButton.addEventListener("click", () => {
+    try { syncBankCount(state.custom.accounts.length + 1); }
+    catch (error) { els.captureFeedback.textContent = error.message; }
+  });
+  els.banksEditor.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-retire-bank]");
+    if (button) openBankRetirement(button.dataset.retireBank, button);
+  });
+  els.cancelBankRetire.addEventListener("click", () => els.bankRetireDialog.close());
+  els.confirmBankRetire.addEventListener("click", submitBankRetirement);
+  els.bankRetireDialog.addEventListener("close", () => {
+    const opener = state.bankRetirement?.opener;
+    state.bankRetirement = null;
+    if (opener?.isConnected) opener.focus();
+  });
 
   els.banksEditor.addEventListener("input", (event) => {
     const row = event.target.closest("[data-bank-id]");
@@ -1336,14 +1757,16 @@ function bindEvents() {
       return;
     }
 
-    if (field === "balance") {
-      account.balance = toSafeNumber(event.target.value);
-    } else if (field === "name") {
-      account.name = event.target.value.slice(0, 50) || "Banco";
+    if (!["balance", "name"].includes(field)) return;
+    const value = field === "balance" ? toSafeNumber(event.target.value) : event.target.value.slice(0, 50) || "Banco";
+    try {
+      persistCustomCandidate({ ...state.custom, accounts: state.custom.accounts.map((item) => item.id === account.id ? { ...item, [field]: value } : item) });
+      els.captureFeedback.textContent = "";
+    } catch (error) {
+      els.captureFeedback.textContent = error.message;
+      return;
     }
-
-    saveCustomState();
-    els.initialTotal.textContent = currency.format(getAvailableBalance(state.custom.accounts));
+    els.initialTotal.textContent = detailCurrency.format(getAvailableBalance(state.custom.accounts));
     if (field === "name") {
       renderCaptureBank();
       renderCaptureList();
@@ -1359,6 +1782,8 @@ function bindEvents() {
     [els.movementSearch, "query", "input"],
     [els.movementTypeFilter, "type", "change"],
     [els.movementStatusFilter, "status", "change"],
+    [els.movementBankFilter, "bank", "change"],
+    [els.movementCategoryFilter, "category", "change"],
     [els.movementScopeFilter, "scope", "change"],
     [els.movementFromFilter, "from", "change"],
     [els.movementToFilter, "to", "change"],
@@ -1407,20 +1832,29 @@ function bindEvents() {
     });
   });
   els.movementEditForm.addEventListener("submit", submitMovementEdit);
-  [els.editDateEnabled, els.editStatusEnabled, els.editMovementStatus, els.editBankEnabled, els.editMovementBank].forEach((control) => {
+  [els.editDateEnabled, els.editStatusEnabled, els.editMovementStatus, els.editBankEnabled, els.editMovementBank,
+    els.editCategoryEnabled, els.editMovementCategory, els.editTransferFromBank, els.editTransferToBank].forEach((control) => {
     control.addEventListener("change", updateMovementEditPreview);
   });
   els.editMovementDate.addEventListener("input", updateMovementEditPreview);
   els.editMovementDate.addEventListener("change", updateMovementEditPreview);
+  [els.editMovementConcept, els.editMovementAmount].forEach((control) => control.addEventListener("input", updateMovementEditPreview));
   els.cancelMovementEdit.addEventListener("click", () => els.movementEditDialog.close());
   els.movementEditDialog.addEventListener("close", finishMovementEditor);
 
-  els.captureList.addEventListener("click", (event) => {
+  [els.captureList, els.movementsTableBody].forEach((container) => container.addEventListener("click", (event) => {
     const button = event.target.closest("[data-delete-movement]");
-    if (button) {
-      deleteMovement(button.dataset.deleteMovement);
-    }
+    if (!button) return;
+    try { deleteMovement(button.dataset.deleteMovement); }
+    catch (error) { els.movementFeedback.textContent = error.message; els.captureFeedback.textContent = error.message; }
+  }));
+  els.undoToasts.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-undo-delete]");
+    if (!button) return;
+    try { undoDeleteMovement(button.dataset.undoDelete); }
+    catch (error) { els.movementFeedback.textContent = error.message; els.captureFeedback.textContent = error.message; }
   });
+  els.exportMovements.addEventListener("click", exportMovementsToExcel);
 
   els.resetProjection.addEventListener("click", resetCustomProjection);
 }
@@ -1438,4 +1872,5 @@ function initialize() {
 }
 
 initialize();
+
 

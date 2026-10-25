@@ -62,11 +62,14 @@
             <div class="scenario-grid">
               <div class="field-group">
                 <label for="horizon">Horizonte</label>
-                <select id="horizon" name="horizon">
+                <select id="horizon" name="horizon" aria-describedby="horizonHelp">
                   <option value="7">7 días</option>
                   <option value="14" selected>14 días</option>
                   <option value="30">30 días</option>
+                  <option value="60">2 meses</option>
+                  <option value="90">3 meses</option>
                 </select>
+                <p class="horizon-help" id="horizonHelp">2 meses = 60 días · 3 meses = 90 días.</p>
               </div>
 
               <div class="field-group">
@@ -103,15 +106,16 @@
                 <span class="step-number">1</span>
                 <div>
                   <h3>Posición inicial</h3>
-                  <p>Indica cuántos bancos quieres considerar y el saldo de cada uno.</p>
+                  <p>Agrega tus bancos, captura sus saldos y revisa el impacto antes de retirar una cuenta.</p>
                 </div>
               </div>
 
               <div class="bank-toolbar">
                 <div class="field-group compact-field">
                   <label for="bankCount">Número de bancos</label>
-                  <input id="bankCount" type="number" min="1" max="10" step="1" value="1" />
+                  <input id="bankCount" type="number" min="1" max="10" step="1" value="1" readonly />
                 </div>
+                <button class="button button-secondary" id="addBankButton" type="button">Agregar banco</button>
                 <div class="initial-total-card">
                   <small>Saldo inicial total</small>
                   <strong id="initialTotal">$0</strong>
@@ -125,7 +129,7 @@
               <div class="builder-card-heading">
                 <span class="step-number">2</span>
                 <div>
-                  <h3>Cobros y pagos</h3>
+                  <h3>Cobros, pagos y traspasos</h3>
                   <p>Captura los movimientos que impactarán tu liquidez.</p>
                 </div>
               </div>
@@ -152,6 +156,7 @@
                   <select id="movementType">
                     <option value="inflow">Cobro</option>
                     <option value="outflow">Pago</option>
+                    <option value="transfer">Traspaso</option>
                   </select>
                 </div>
 
@@ -163,7 +168,7 @@
                   </select>
                 </div>
 
-                <div class="field-group">
+                <div class="field-group movement-amount-field">
                   <label for="movementAmount">Importe</label>
                   <input id="movementAmount" type="number" min="0.01" step="0.01" placeholder="0.00" required />
                 </div>
@@ -174,6 +179,29 @@
                     <option value="">Sin banco asignado</option>
                   </select>
                   <p class="movement-bank-help" id="movementBankHelp">Puedes guardar el pago sin asignar un banco.</p>
+                </div>
+
+                <div class="field-group movement-category-field" id="movementCategoryField" hidden>
+                  <label for="movementCategory">Categoría del pago</label>
+                  <select id="movementCategory">
+                    <option value="">Sin categoría</option>
+                  </select>
+                </div>
+
+                <div class="transfer-fields" id="transferFields" hidden>
+                  <div class="field-group">
+                    <label for="transferFromBank">Cuenta de origen</label>
+                    <select id="transferFromBank" aria-describedby="transferHelp">
+                      <option value="">Elige una cuenta</option>
+                    </select>
+                  </div>
+                  <div class="field-group">
+                    <label for="transferToBank">Cuenta de destino</label>
+                    <select id="transferToBank" aria-describedby="transferHelp">
+                      <option value="">Elige una cuenta</option>
+                    </select>
+                  </div>
+                  <p class="transfer-help" id="transferHelp">Se programa para la fecha indicada; el efectivo total entre tus cuentas no cambia.</p>
                 </div>
 
                 <button class="button button-primary movement-submit" id="addMovementButton" type="submit">Agregar movimiento</button>
@@ -257,17 +285,21 @@
               </div>
 
               <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Banco</th>
-                      <th class="align-right">Saldo</th>
-                      <th class="align-right">Participación</th>
+                <table class="accounts-table" role="table" aria-describedby="accountsTransferHelp">
+                  <caption class="sr-only">Saldo inicial y efecto de los traspasos por banco</caption>
+                  <thead role="rowgroup">
+                    <tr role="row">
+                      <th scope="col">Banco</th>
+                      <th scope="col" class="align-right">Saldo inicial</th>
+                      <th scope="col" class="align-right">Participación</th>
+                      <th scope="col" class="align-right">Traspasos netos</th>
+                      <th scope="col" class="align-right">Saldo tras traspasos</th>
                     </tr>
                   </thead>
-                  <tbody id="accountsTableBody"></tbody>
+                  <tbody id="accountsTableBody" role="rowgroup"></tbody>
                 </table>
               </div>
+              <p class="table-help" id="accountsTransferHelp">Saldo inicial ajustado solo por los traspasos del período. Los cobros y pagos se consideran en la proyección general.</p>
             </article>
 
             <article class="panel insight-panel">
@@ -379,9 +411,10 @@
               <div class="field-group">
                 <label for="movementTypeFilter">Tipo</label>
                 <select id="movementTypeFilter">
-                  <option value="all">Cobros y pagos</option>
+                  <option value="all">Todos los tipos</option>
                   <option value="inflow">Cobros</option>
                   <option value="outflow">Pagos</option>
+                  <option value="transfer">Traspasos</option>
                 </select>
               </div>
               <div class="field-group">
@@ -390,6 +423,21 @@
                   <option value="all">Todos los estatus</option>
                   <option value="confirmed">Confirmado</option>
                   <option value="pending">Por confirmar</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="movementBankFilter">Banco</label>
+                <select id="movementBankFilter">
+                  <option value="all">Todos los bancos</option>
+                  <option value="unassigned">Pagos sin banco</option>
+                  <option value="unavailable">Banco no disponible</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="movementCategoryFilter">Categoría</label>
+                <select id="movementCategoryFilter">
+                  <option value="all">Todas las categorías</option>
+                  <option value="unassigned">Sin categoría</option>
                 </select>
               </div>
               <div class="field-group">
@@ -409,19 +457,39 @@
             </p>
 
             <div class="movement-selection-toolbar">
-              <span id="selectionSummary" role="status" aria-live="polite">0 seleccionados</span>
+              <div class="movement-selection-summary">
+                <span id="selectionSummary" role="status" aria-live="polite">0 seleccionados</span>
+                <div class="selection-totals" id="selectionTotals" aria-live="polite"></div>
+              </div>
               <div class="movement-selection-actions">
                 <button class="button button-primary" id="editSelectedMovements" type="button" disabled>Editar seleccionados</button>
                 <button class="button button-secondary" id="clearMovementSelection" type="button" disabled>Quitar selección</button>
               </div>
             </div>
 
+            <div class="movement-export-toolbar" role="group" aria-label="Exportar movimientos">
+              <div class="field-group">
+                <label for="exportScope">Movimientos a exportar</label>
+                <select id="exportScope">
+                  <option value="visible">Resultados filtrados</option>
+                  <option value="selected">Seleccionados</option>
+                  <option value="all">Todos</option>
+                </select>
+              </div>
+              <button class="button button-secondary" id="exportMovements" type="button">Exportar Excel</button>
+            </div>
+            <p class="movement-feedback" id="exportFeedback" role="status" aria-live="polite"></p>
+
             <div class="table-wrap">
-              <table class="movements-table" aria-describedby="movementTableHint">
-                <thead>
-                  <tr>
+              <table class="movements-table" role="table" aria-describedby="movementTableHint">
+                <caption class="sr-only">Movimientos de efectivo filtrados y selección para edición</caption>
+                <thead role="rowgroup">
+                  <tr role="row">
                     <th scope="col" class="movement-selection-cell">
-                      <input class="movement-checkbox" id="selectAllMovements" type="checkbox" aria-label="Seleccionar todos los movimientos visibles" />
+                      <label class="select-visible-label">
+                        <input class="movement-checkbox" id="selectAllMovements" type="checkbox" aria-label="Seleccionar todos los movimientos visibles" />
+                        <span class="select-visible-copy">Seleccionar visibles</span>
+                      </label>
                     </th>
                     <th scope="col">Fecha</th>
                     <th scope="col">Concepto</th>
@@ -431,10 +499,18 @@
                     <th scope="col"><span class="sr-only">Acciones</span></th>
                   </tr>
                 </thead>
-                <tbody id="movementsTableBody"></tbody>
+                <tbody id="movementsTableBody" role="rowgroup"></tbody>
               </table>
             </div>
             <p class="movement-feedback" id="movementFeedback" role="status" aria-live="polite"></p>
+
+            <section class="payment-groups-section" aria-labelledby="paymentGroupsTitle">
+              <div class="payment-groups-heading">
+                <h3 id="paymentGroupsTitle">Pagos por categoría</h3>
+                <p>Según los filtros de movimientos. Sin categoría aparece al final.</p>
+              </div>
+              <div class="payment-groups" id="paymentGroups"></div>
+            </section>
           </section>
         </section>
       </main>
@@ -452,6 +528,17 @@
         <h2 id="movementEditTitle">Editar movimiento</h2>
         <p class="movement-edit-description" id="movementEditDescription"></p>
         <p class="movement-edit-help">Marca los campos que quieres cambiar. Los demás conservarán su valor.</p>
+
+        <div class="edit-individual-fields" id="editIndividualFields" hidden>
+          <div class="field-group">
+            <label for="editMovementConcept">Concepto</label>
+            <input id="editMovementConcept" type="text" maxlength="70" />
+          </div>
+          <div class="field-group">
+            <label for="editMovementAmount">Importe</label>
+            <input id="editMovementAmount" type="number" min="0.01" step="0.01" />
+          </div>
+        </div>
 
         <div class="movement-edit-fields">
           <div class="movement-edit-field">
@@ -484,6 +571,30 @@
             </select>
             <p class="movement-bank-help" id="editBankHelp">Elige Sin banco asignado para quitar la asignación.</p>
           </div>
+          <div class="movement-edit-field movement-edit-category-field" id="editCategoryField" hidden>
+            <label class="movement-edit-toggle" for="editCategoryEnabled">
+              <input class="movement-checkbox" id="editCategoryEnabled" type="checkbox" />
+              <span>Cambiar categoría</span>
+            </label>
+            <label class="sr-only" for="editMovementCategory">Categoría del pago</label>
+            <select id="editMovementCategory" disabled>
+              <option value="">Sin categoría</option>
+            </select>
+          </div>
+          <div class="movement-edit-field edit-transfer-fields" id="editTransferFields" hidden>
+            <div class="field-group">
+              <label for="editTransferFromBank">Cuenta de origen</label>
+              <select id="editTransferFromBank">
+                <option value="">Elige una cuenta</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="editTransferToBank">Cuenta de destino</label>
+              <select id="editTransferToBank">
+                <option value="">Elige una cuenta</option>
+              </select>
+            </div>
+          </div>
         </div>
 
         <p class="movement-edit-preview" id="editMovementPreview" aria-live="polite"></p>
@@ -495,8 +606,24 @@
       </form>
     </dialog>
 
+    <dialog class="movement-edit-dialog bank-retire-dialog" id="bankRetireDialog" aria-labelledby="bankRetireTitle" aria-describedby="bankRetireDescription">
+      <p class="section-kicker">GESTIÓN DE BANCOS</p>
+      <h2 id="bankRetireTitle">Retirar banco</h2>
+      <p class="movement-edit-description" id="bankRetireDescription"></p>
+      <div class="bank-retire-impact" id="bankRetireImpact"></div>
+      <p class="movement-edit-error" id="bankRetireError" role="alert"></p>
+      <div class="movement-edit-actions">
+        <button class="button button-secondary" id="cancelBankRetire" type="button">Cancelar</button>
+        <button class="button button-danger" id="confirmBankRetire" type="button">Retirar banco</button>
+      </div>
+    </dialog>
+
+    <div class="undo-toasts" id="undoToasts" role="region" aria-label="Movimientos eliminados" aria-live="polite"></div>
+
     <div class="sr-only" id="liveRegion" aria-live="polite"></div>
+    <script src="excel-export.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
+
 

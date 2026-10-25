@@ -80,6 +80,19 @@ class Element {
 function harness(saved) {
   const elements = new Map();
   const values = new Map(saved ? [[STORAGE_KEY, JSON.stringify(saved)]] : []);
+  const clock = { now: Date.now() };
+  class ClockDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [clock.now])); }
+    static now() { return clock.now; }
+  }
+  const timers = new Map();
+  let nextTimerId = 0;
+  function schedule(callback, delay = 0, ...args) {
+    const id = ++nextTimerId;
+    timers.set(id, { callback, delay, at: clock.now + delay, args });
+    return id;
+  }
+  function unschedule(id) { timers.delete(id); }
   const storage = {
     writes: 0,
     fail: false,
@@ -95,7 +108,7 @@ function harness(saved) {
   const context = vm.createContext({
     console: { warn() {}, error() {}, log() {} },
     Intl,
-    Date,
+    Date: ClockDate,
     Set,
     Map,
     crypto: { randomUUID: () => `synthetic-${++nextId}` },
@@ -109,13 +122,26 @@ function harness(saved) {
       activeElement: new Element("BUTTON"),
       body: new Element("BODY"),
     },
-    window: { confirm: () => true },
+    window: { confirm: () => true, setTimeout: schedule, clearTimeout: unschedule },
+    setTimeout: schedule,
+    clearTimeout: unschedule,
     requestAnimationFrame: (callback) => callback(),
   });
   vm.runInContext(source, context, { filename: "app.js" });
   return {
     storage,
     elements,
+    clock,
+    timers,
+    advanceTime(milliseconds) {
+      clock.now += milliseconds;
+      const due = [...timers.entries()].filter(([, timer]) => timer.at <= clock.now);
+      for (const [id, timer] of due) {
+        if (!timers.has(id)) continue;
+        timers.delete(id);
+        timer.callback(...timer.args);
+      }
+    },
     run(code, input) {
       context.input = input;
       return vm.runInContext(code, context);
@@ -703,7 +729,7 @@ test("R10: removing and re-adding accounts never remaps a payment to a new bank"
     { id: "bank-a", name: "Banco Alfa", balance: 800 },
     { id: "bank-b", name: "Banco Beta", balance: 200 },
   ]);
-  h.run("syncBankCount(1);");
+  h.run('commitBankRemoval("bank-b");');
   assert.equal(h.run("getMovementBankId(state.custom.movements[0])"), "bank-b");
   assert.equal(h.run("getMovementBankLabel(state.custom.movements[0])"), "Banco no disponible");
   h.run("syncBankCount(2);");
@@ -785,3 +811,527 @@ test("R10: demo bank edits are isolated and never persisted into personal data",
   assert.deepEqual(h.json("state.custom"), before);
   assert.equal(h.storage.writes, 0);
 });
+
+// Extended movement management. These contracts intentionally use small,
+// hand-calculated examples instead of reproducing the implementation.
+const treasuryAccounts = [
+  { id: "bank-a", name: "Banco Alfa", balance: 1000 },
+  { id: "bank-b", name: "Banco Beta", balance: 500 },
+  { id: "bank-c", name: "Banco Gamma", balance: 250 },
+];
+
+function seedTreasury(h, movements) {
+  seed(h, movements, treasuryAccounts.map((account) => ({ ...account })));
+}
+
+function transfer(id, date, extra = {}) {
+  return movement(id, date, { type: "transfer", fromBankId: "bank-a", toBankId: "bank-b", ...extra });
+}
+
+function transferDraft(h, extra = {}) {
+  h.run('els.movementDate.value = input.date; els.movementConcept.value = input.concept; els.movementAmount.value = String(input.amount); els.movementType.value = "transfer"; els.movementStatus.value = "pending"; els.transferFromBank.value = input.fromBankId; els.transferToBank.value = input.toBankId;', {
+    date: h.day(2), concept: "Traspaso sintético", amount: 40.25, fromBankId: "bank-a", toBankId: "bank-b", ...extra,
+  });
+}
+
+test("EXT horizon: 60 and 90 days include their endpoint and exclude the following day", () => {
+  const h = harness();
+  seedTreasury(h, [movement("day60", h.day(60), { amount: 60 }), payment("day61", h.day(61), { amount: 10 }), movement("day90", h.day(90), { amount: 90 }), payment("day91", h.day(91), { amount: 100 })]);
+  h.run("state.horizon = 60;");
+  assert.deepEqual(h.json("getFilteredMovements().map(m => m.id)"), ["day60"]);
+  assert.equal(h.run("getForecastSeries(getFilteredMovements(), getAvailableBalance()).length"), 61);
+  h.run("state.horizon = 90;");
+  assert.deepEqual(h.json("getFilteredMovements().map(m => m.id)"), ["day60", "day61", "day90"]);
+  assert.equal(h.run("getForecastSeries(getFilteredMovements(), getAvailableBalance()).length"), 91);
+  assert.equal(h.run("getForecastSeries(getFilteredMovements(), getAvailableBalance()).at(-1).balance"), 1890);
+  assert.equal(h.run("toISODate(getForecastSeries(getFilteredMovements(), getAvailableBalance()).at(-1).date)"), h.day(90));
+});
+
+test("EXT detail: movement amounts retain two decimals while KPIs keep their existing formatting", () => {
+  const h = harness();
+  assert.equal(h.run("detailCurrency.format(100.49)"), "$100.49");
+  assert.equal(h.run("detailCurrency.format(100)"), "$100.00");
+  assert.equal(h.run("detailCurrency.format(0.01)"), "$0.01");
+  assert.equal(h.run("currency.format(100.49)"), "$100");
+});
+
+test("EXT categories: used payment categories follow the catalog and unassigned is always last", () => {
+  const h = harness();
+  const rows = [
+    payment("none", h.day(1)), payment("tax", h.day(2), { categoryId: "impuestos", amount: 50 }),
+    payment("cost1", h.day(2), { categoryId: "costos", amount: 20 }), payment("cost2", h.day(3), { categoryId: "costos", amount: 30 }),
+    movement("income", h.day(1), { categoryId: "nomina" }), transfer("transfer", h.day(2)),
+  ];
+  seedTreasury(h, rows);
+  assert.deepEqual(h.json("CATEGORY_OPTIONS.map(option => option.id)"), ["costos", "gastos", "nomina", "financieros", "impuestos", "otros"]);
+  assert.deepEqual(h.json("getPaymentGroups().map(group => ({ id: group.id, ids: group.movements.map(m => m.id), total: group.total }))"), [
+    { id: "costos", ids: ["cost1", "cost2"], total: 50 },
+    { id: "impuestos", ids: ["tax"], total: 50 },
+    { id: "", ids: ["none"], total: 100 },
+  ]);
+  assert.equal(h.run("getMovementCategoryId(state.custom.movements[4])"), "");
+  assert.equal(h.run("getMovementCategoryLabel(state.custom.movements[0])"), "Sin categoría");
+  assert.deepEqual(h.json("getPaymentGroups([]).map(group => ({ id: group.id, total: group.total, count: group.movements.length }))"), [{ id: "", total: 0, count: 0 }]);
+  assert.deepEqual(h.json("getPaymentGroups([state.custom.movements[1]]).map(group => group.id)"), ["impuestos", ""]);
+});
+
+test("EXT categories: assignment, change and clearing preserve other fields and support batches of payments", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(-2)), payment("b", h.day(3), { categoryId: "gastos", status: "pending" }), movement("other", h.day(1))]);
+  const before = h.json("state.custom");
+  assert.equal(h.run('commitMovementEdit(["a", "b"], { categoryId: "nomina" }, "custom")'), 2);
+  assert.deepEqual(h.json("state.custom.movements"), [{ ...before.movements[0], categoryId: "nomina" }, { ...before.movements[1], categoryId: "nomina" }, before.movements[2]]);
+  assert.equal(h.run('commitMovementEdit(["a"], { categoryId: "" }, "custom")'), 1);
+  assert.equal(h.run("getMovementCategoryId(state.custom.movements[0])"), "");
+  assert.deepEqual(h.json("state.custom.accounts"), before.accounts);
+  assert.equal(h.storage.writes, 2);
+});
+
+test("EXT categories: empty legacy category is a no-op and invalid or mixed batches reject atomically", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1)), movement("i", h.day(1)), transfer("t", h.day(1))]);
+  const before = h.json("state.custom");
+  assert.equal(h.run('commitMovementEdit(["p"], { categoryId: "" }, "custom")'), 0);
+  for (const patch of [{ categoryId: "unknown" }, { categoryId: null }, { categoryId: 3 }]) {
+    assert.throws(() => h.run('commitMovementEdit(["p"], input, "custom")', patch));
+  }
+  for (const ids of [["p", "i"], ["p", "t"]]) {
+    assert.throws(() => h.run('commitMovementEdit(input, { categoryId: "costos", status: "pending" }, "custom")', ids));
+    assert.throws(() => h.run('commitMovementEdit(input, { categoryId: "" }, "custom")', ids));
+  }
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("EXT categories: capture and reload preserve an optional payment category", () => {
+  const h = harness();
+  seed(h, []);
+  paymentDraft(h);
+  h.run('els.movementCategory.value = "gastos"; addMovement(input);', { preventDefault() {} });
+  assert.equal(h.saved().movements[0].categoryId, "gastos");
+  const reloaded = harness(h.saved());
+  assert.equal(reloaded.run("getMovementCategoryId(state.custom.movements[0])"), "gastos");
+  assert.equal(reloaded.run("state.custom.movements[0].amount"), 125.5);
+});
+
+test("EXT filters: bank matches payment assignment or either transfer endpoint, never unassigned income", () => {
+  const h = harness();
+  seedTreasury(h, [payment("assigned", h.day(1), { bankId: "bank-a", categoryId: "costos" }), payment("none", h.day(2)), payment("orphan", h.day(3), { bankId: "missing" }), movement("income", h.day(1)), transfer("out", h.day(4)), transfer("in", h.day(5), { fromBankId: "bank-c", toBankId: "bank-a" }), transfer("orphan-transfer", h.day(6), { fromBankId: "missing" })]);
+  const totals = h.json("getPeriodTotals(getFilteredMovements())");
+  h.run('state.movementFilters.bank = "bank-a";');
+  assert.deepEqual(h.json("getVisibleMovements().map(m => m.id)"), ["assigned", "out", "in"]);
+  h.run('state.movementFilters.bank = "unassigned";');
+  assert.deepEqual(h.json("getVisibleMovements().map(m => m.id)"), ["none"]);
+  h.run('state.movementFilters.bank = "unavailable";');
+  assert.deepEqual(h.json("getVisibleMovements().map(m => m.id)"), ["orphan", "orphan-transfer"]);
+  assert.deepEqual(h.json("getPeriodTotals(getFilteredMovements())"), totals);
+});
+
+test("EXT filters: category filters affect payments only and legacy filter objects stay compatible", () => {
+  const h = harness();
+  seedTreasury(h, [payment("cost", h.day(1), { categoryId: "costos", bankId: "bank-a" }), payment("none", h.day(2)), movement("income", h.day(3)), transfer("t", h.day(4))]);
+  h.run('state.movementFilters.category = "costos"; state.movementFilters.bank = "bank-a";');
+  assert.deepEqual(h.json("getVisibleMovements().map(m => m.id)"), ["cost"]);
+  h.run('state.movementFilters.category = "unassigned"; state.movementFilters.bank = "all";');
+  assert.deepEqual(h.json("getVisibleMovements().map(m => m.id)"), ["none"]);
+  h.run('state.movementFilters = { query: "", type: "all", status: "all", from: "", to: "", scope: "projection" };');
+  assert.deepEqual(h.json("getVisibleMovements().map(m => m.id)"), ["cost", "none", "income", "t"]);
+});
+
+test("EXT transfers: internal transfers do not inflate external cash totals or the consolidated forecast", () => {
+  const h = harness();
+  seedTreasury(h, [movement("income", h.day(1), { amount: 300 }), payment("payment", h.day(2), { amount: 120 }), transfer("transfer", h.day(), { amount: 900, status: "pending" })]);
+  assert.deepEqual(h.json("getPeriodTotals(getFilteredMovements())"), { inflows: 300, outflows: 120, inflowCount: 1, outflowCount: 1 });
+  assert.equal(h.run("getMovementCashImpact(state.custom.movements[2])"), 0);
+  assert.equal(h.run("getMovementCashImpact(state.custom.movements[0])"), 300);
+  assert.equal(h.run("getMovementCashImpact(state.custom.movements[1])"), -120);
+  assert.equal(h.run("getForecastSeries(getFilteredMovements(), getAvailableBalance())[0].balance"), 1750);
+  assert.equal(h.run("getForecastSeries(getFilteredMovements(), getAvailableBalance()).at(-1).balance"), 1930);
+  assert.deepEqual(h.json("getSelectionTotals(state.custom.movements)"), { count: 3, inflows: 300, outflows: 120, transfers: 900, net: 180 });
+  h.run("state.includePending = false;");
+  assert.equal(h.run("getForecastSeries(getFilteredMovements(), getAvailableBalance()).at(-1).balance"), 1930);
+  assert.deepEqual(h.json("getSelectionTotals([])"), { count: 0, inflows: 0, outflows: 0, transfers: 0, net: 0 });
+});
+
+test("EXT transfers: account transfer nets conserve the consolidated balance and ignore external payments", () => {
+  const h = harness();
+  const rows = [transfer("ab", h.day(1), { amount: 120 }), transfer("ba", h.day(2), { fromBankId: "bank-b", toBankId: "bank-a", amount: 20 }), payment("payment", h.day(1), { bankId: "bank-a", amount: 900 })];
+  seedTreasury(h, rows);
+  assert.equal(h.run('getAccountTransferNet("bank-a", state.custom.movements)'), -100);
+  assert.equal(h.run('getAccountTransferNet("bank-b", state.custom.movements)'), 100);
+  assert.equal(h.run('getAccountTransferNet("bank-c", state.custom.movements)'), 0);
+  assert.equal(h.run('getAccountTransferNet("bank-a", state.custom.movements) + getAccountTransferNet("bank-b", state.custom.movements)'), 0);
+});
+
+test("EXT transfers: capture and reload retain transfer type/endpoints without payment metadata", () => {
+  const h = harness();
+  seedTreasury(h, []);
+  transferDraft(h);
+  h.run('els.movementBank.value = "bank-a"; els.movementCategory.value = "nomina"; addMovement(input);', { preventDefault() {} });
+  assert.equal(h.run("state.custom.movements.length"), 1);
+  const row = h.saved().movements[0];
+  assert.equal(row.type, "transfer");
+  assert.equal(row.fromBankId, "bank-a");
+  assert.equal(row.toBankId, "bank-b");
+  assert.equal(row.bankId, undefined);
+  assert.equal(row.categoryId, undefined);
+  const reloaded = harness(h.saved());
+  assert.deepEqual(reloaded.json("state.custom"), h.saved());
+  assert.equal(reloaded.run("getMovementCashImpact(state.custom.movements[0])"), 0);
+});
+
+test("EXT transfers: captured endpoints must be distinct existing accounts and failures retain the draft", () => {
+  const h = harness();
+  seedTreasury(h, []);
+  for (const endpoints of [{ fromBankId: "bank-a", toBankId: "bank-a" }, { fromBankId: "missing", toBankId: "bank-b" }, { fromBankId: "bank-a", toBankId: "" }]) {
+    transferDraft(h, endpoints);
+    h.run("addMovement(input)", { preventDefault() {} });
+    assert.deepEqual(h.json("state.custom.movements"), []);
+    assert.equal(h.run("els.movementConcept.value"), "Traspaso sintético");
+    assert.equal(h.run("els.transferFromBank.value"), endpoints.fromBankId);
+    assert.equal(h.run("els.transferToBank.value"), endpoints.toBankId);
+    assert.notEqual(h.run("els.captureFeedback.textContent"), "");
+  }
+  assert.equal(h.storage.writes, 0);
+});
+
+test("EXT transfers: storage rejection keeps endpoints and the unsubmitted transfer draft", () => {
+  const h = harness();
+  seedTreasury(h, []);
+  transferDraft(h);
+  h.storage.fail = true;
+  h.run("addMovement(input)", { preventDefault() {} });
+  assert.deepEqual(h.json("state.custom.movements"), []);
+  assert.equal(h.run("els.transferFromBank.value"), "bank-a");
+  assert.equal(h.run("els.transferToBank.value"), "bank-b");
+  assert.equal(h.run("els.movementAmount.value"), "40.25");
+  assert.equal(h.storage.writes, 0);
+});
+
+test("EXT transfers: a persisted orphan remains an internal transfer instead of becoming income", () => {
+  const saved = { accounts: treasuryAccounts, movements: [transfer("orphan", "2028-05-01", { toBankId: "removed" })] };
+  const h = harness(saved);
+  assert.equal(h.run("state.custom.movements[0].type"), "transfer");
+  assert.equal(h.run("state.custom.movements[0].toBankId"), "removed");
+  assert.equal(h.run("getMovementCashImpact(state.custom.movements[0])"), 0);
+  assert.deepEqual(h.json("getPeriodTotals(state.custom.movements)"), { inflows: 0, outflows: 0, inflowCount: 0, outflowCount: 0 });
+});
+
+test("EXT individual editing: concept is trimmed and cents amounts change only the target", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1), { bankId: "bank-a", categoryId: "nomina" }), movement("other", h.day(2))]);
+  const before = h.json("state.custom.movements");
+  assert.equal(h.run('commitMovementEdit(["p"], { concept: "  Concepto corregido  ", amount: 1.12 }, "custom")'), 1);
+  assert.deepEqual(h.json("state.custom.movements"), [{ ...before[0], concept: "Concepto corregido", amount: 1.12 }, before[1]]);
+  assert.equal(h.storage.writes, 1);
+});
+
+test("EXT individual editing: invalid concept/amount patches are atomic and cannot be smuggled into a batch", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1)), payment("b", h.day(2))]);
+  const before = h.json("state.custom");
+  for (const patch of [{ concept: "   " }, { concept: "a".repeat(71) }, { concept: 123 }, { amount: 0 }, { amount: -1 }, { amount: 1.001 }, { amount: NaN }, { amount: Infinity }, { amount: "20" }, { type: "inflow" }]) {
+    assert.throws(() => h.run('commitMovementEdit(["a"], { ...input, status: "pending" }, "custom")', patch));
+  }
+  for (const patch of [{ amount: 200 }, { concept: "Changed" }]) {
+    assert.throws(() => h.run('commitMovementEdit(["a", "b"], { ...input, status: "pending" }, "custom")', patch));
+  }
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("EXT transfer editing: endpoint changes are individual, distinct and restricted to transfers", () => {
+  const h = harness();
+  seedTreasury(h, [transfer("t", h.day(1)), transfer("t2", h.day(2)), payment("p", h.day(1))]);
+  assert.equal(h.run('commitMovementEdit(["t"], { toBankId: "bank-c", amount: 25.01 }, "custom")'), 1);
+  assert.equal(h.run("state.custom.movements[0].fromBankId"), "bank-a");
+  assert.equal(h.run("state.custom.movements[0].toBankId"), "bank-c");
+  const before = h.json("state.custom");
+  for (const [ids, patch] of [
+    [["t"], { toBankId: "bank-a" }], [["t"], { fromBankId: "missing" }], [["t"], { toBankId: "" }],
+    [["t", "t2"], { toBankId: "bank-b" }], [["p"], { fromBankId: "bank-a" }], [["t"], { bankId: "bank-a" }], [["t"], { categoryId: "gastos" }],
+  ]) {
+    assert.throws(() => h.run('commitMovementEdit(input.ids, { ...input.patch, status: "pending" }, "custom")', { ids, patch }));
+  }
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 1);
+});
+
+test("EXT bank removal: impact counts payment and transfer references and blocks a referenced bank", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1), { bankId: "bank-a" }), transfer("t1", h.day(1), { amount: 80 }), transfer("t2", h.day(-10), { fromBankId: "bank-c", toBankId: "bank-a", amount: 20, status: "pending" })]);
+  assert.deepEqual(h.json('getBankRemovalImpact("bank-a")'), { account: treasuryAccounts[0], paymentCount: 1, transferCount: 2, transferAmount: 100 });
+  const before = h.json("state.custom");
+  assert.throws(() => h.run('commitBankRemoval("bank-a")'));
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("EXT bank removal: retiring an unreferenced account preserves payments and other accounts", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1), { bankId: "bank-b" }), movement("i", h.day(2))]);
+  const rows = h.json("state.custom.movements");
+  h.run('commitBankRemoval("bank-b");');
+  assert.deepEqual(h.json("state.custom.accounts.map(a => a.id)"), ["bank-a", "bank-c"]);
+  assert.deepEqual(h.json("state.custom.movements"), rows);
+  assert.equal(h.run("getMovementBankLabel(state.custom.movements[0])"), "Banco no disponible");
+  assert.deepEqual(h.saved(), h.json("state.custom"));
+  assert.equal(h.storage.writes, 1);
+});
+
+test("EXT bank removal: last account, unknown ID and storage errors leave state unchanged", () => {
+  const h = harness();
+  seed(h, []);
+  const single = h.json("state.custom");
+  assert.throws(() => h.run('commitBankRemoval("bank-test")'));
+  assert.deepEqual(h.json("state.custom"), single);
+  seedTreasury(h, []);
+  const before = h.json("state.custom");
+  assert.throws(() => h.run('commitBankRemoval("not-there")'));
+  h.storage.fail = true;
+  assert.throws(() => h.run('commitBankRemoval("bank-b")'));
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("EXT undo: deletion persists atomically and creates one independent five-second recovery token", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1)), movement("b", h.day(2))]);
+  const token = h.run('deleteMovement("a")');
+  assert.ok(token);
+  assert.deepEqual(h.json("state.custom.movements.map(m => m.id)"), ["b"]);
+  assert.deepEqual(h.saved(), h.json("state.custom"));
+  assert.equal(h.run("state.undoDeletions.size"), 1);
+  const entry = h.json("state.undoDeletions.get(input)", token);
+  assert.equal(entry.movement.id, "a");
+  assert.equal(entry.index, 0);
+  assert.equal(entry.expiresAt, h.clock.now + 5000);
+  assert.ok([...h.timers.values()].some((timer) => timer.delay === 5000));
+  assert.equal(h.storage.writes, 1);
+});
+
+test("EXT undo: restoration merges into current data without reverting subsequent edits or additions", () => {
+  const h = harness();
+  const removed = payment("a", h.day(1), { bankId: "bank-a", categoryId: "costos", amount: 75.12 });
+  seedTreasury(h, [removed, payment("b", h.day(2))]);
+  const token = h.run('deleteMovement("a")');
+  h.run('commitMovementEdit(["b"], { concept: "Corregido después", amount: 225.5 }, "custom");');
+  transferDraft(h);
+  h.run("addMovement(input)", { preventDefault() {} });
+  h.run('persistCustomCandidate({ ...state.custom, accounts: state.custom.accounts.map(a => a.id === "bank-a" ? { ...a, name: "Renombrado después" } : a) });');
+  h.run("undoDeleteMovement(input)", token);
+  const rows = h.json("state.custom.movements");
+  assert.deepEqual(rows.find((row) => row.id === "a"), removed);
+  assert.equal(rows.find((row) => row.id === "b").amount, 225.5);
+  assert.equal(rows.find((row) => row.id === "b").concept, "Corregido después");
+  assert.equal(rows.filter((row) => row.type === "transfer").length, 1);
+  assert.equal(h.run("state.custom.accounts[0].name"), "Renombrado después");
+  assert.equal(h.run("state.undoDeletions.has(input)", token), false);
+  assert.deepEqual(h.saved(), h.json("state.custom"));
+});
+
+test("EXT undo: consecutive deletions can be restored independently without duplicates", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1)), payment("b", h.day(2)), movement("c", h.day(3))]);
+  const a = h.run('deleteMovement("a")');
+  const b = h.run('deleteMovement("b")');
+  assert.notEqual(a, b);
+  assert.equal(h.run("state.undoDeletions.size"), 2);
+  h.run("undoDeleteMovement(input)", a);
+  assert.equal(h.run("state.undoDeletions.has(input)", b), true);
+  h.run("undoDeleteMovement(input)", b);
+  assert.deepEqual(h.json("state.custom.movements.map(m => m.id).sort()"), ["a", "b", "c"]);
+  assert.throws(() => h.run("undoDeleteMovement(input)", a));
+  assert.equal(h.run("state.custom.movements.length"), 3);
+});
+
+test("EXT undo: the exact expiry boundary rejects restoration without changing saved data", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1))]);
+  const token = h.run('deleteMovement("a")');
+  const expiresAt = h.run("state.undoDeletions.get(input).expiresAt", token);
+  const before = h.json("state.custom");
+  assert.throws(() => h.run("undoDeleteMovement(input.token, input.now)", { token, now: expiresAt }));
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.deepEqual(h.saved(), before);
+  assert.equal(h.storage.writes, 1);
+});
+
+test("EXT undo: timer expiry removes recovery without waiting in real time", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1))]);
+  const token = h.run('deleteMovement("a")');
+  h.advanceTime(4999);
+  assert.equal(h.run("state.undoDeletions.has(input)", token), true);
+  h.advanceTime(1);
+  assert.equal(h.run("state.undoDeletions.has(input)", token), false);
+  assert.throws(() => h.run("undoDeleteMovement(input)", token));
+  assert.equal(h.run("state.custom.movements.length"), 0);
+});
+
+test("EXT undo: failed deletion or unknown IDs neither mutate data nor offer phantom recovery", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1))]);
+  const before = h.json("state.custom");
+  assert.throws(() => h.run('deleteMovement("missing")'));
+  h.storage.fail = true;
+  assert.throws(() => h.run('deleteMovement("a")'));
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.run("state.undoDeletions.size"), 0);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("EXT undo: storage failure preserves the recovery token for a timely retry", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1))]);
+  const token = h.run('deleteMovement("a")');
+  const before = h.json("state.custom");
+  h.storage.fail = true;
+  assert.throws(() => h.run("undoDeleteMovement(input)", token));
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.deepEqual(h.saved(), before);
+  assert.equal(h.run("state.undoDeletions.has(input)", token), true);
+  h.storage.fail = false;
+  h.run("undoDeleteMovement(input)", token);
+  assert.equal(h.run("state.custom.movements[0].id"), "a");
+  assert.equal(h.run("state.undoDeletions.has(input)", token), false);
+});
+
+test("EXT undo: an existing movement ID cannot be overwritten by a recovered record", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1))]);
+  const token = h.run('deleteMovement("a")');
+  h.run('persistCustomCandidate({ ...state.custom, movements: [input] });', payment("a", h.day(2), { concept: "Registro nuevo", amount: 500 }));
+  const before = h.json("state.custom");
+  assert.throws(() => h.run("undoDeleteMovement(input)", token));
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.deepEqual(h.saved(), before);
+});
+
+test("EXT undo: a deleted transfer cannot be restored after an endpoint account is removed", () => {
+  const h = harness();
+  seedTreasury(h, [transfer("t", h.day(1))]);
+  const token = h.run('deleteMovement("t")');
+  h.run('commitBankRemoval("bank-b");');
+  const before = h.json("state.custom");
+  assert.throws(() => h.run("undoDeleteMovement(input)", token));
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.deepEqual(h.saved(), before);
+});
+
+test("EXT undo: a payment can be recovered with its unavailable optional bank intact", () => {
+  const h = harness();
+  const row = payment("p", h.day(1), { bankId: "bank-b", categoryId: "gastos" });
+  seedTreasury(h, [row]);
+  const token = h.run('deleteMovement("p")');
+  h.run('commitBankRemoval("bank-b");');
+  h.run("undoDeleteMovement(input)", token);
+  assert.deepEqual(h.json("state.custom.movements[0]"), row);
+  assert.equal(h.run("getMovementBankLabel(state.custom.movements[0])"), "Banco no disponible");
+});
+
+// Model the relevant DOM behavior: replacing innerHTML disconnects its old
+// buttons and releases their focus. This keeps concurrent-toast tests honest
+// without pretending that the basic Element adapter is a browser renderer.
+function trackUndoToastFocus(h) {
+  h.run(`(() => {
+    let html = "";
+    let buttons = [];
+    Object.defineProperty(els.undoToasts, "innerHTML", {
+      get() { return html; },
+      set(value) {
+        if (buttons.includes(document.activeElement)) document.activeElement = document.body;
+        html = value;
+        buttons = [...value.matchAll(/data-undo-delete="([^"]+)"/g)].map(([, token]) => ({
+          dataset: { undoDelete: token },
+          focus() { document.activeElement = this; },
+        }));
+      },
+    });
+    els.undoToasts.querySelectorAll = (selector) => selector === "[data-undo-delete]" ? buttons : [];
+    els.movementSearch.focus = () => { document.activeElement = els.movementSearch; };
+  })();`);
+}
+
+test("EXT undo focus: expiring one toast preserves keyboard focus on another live recovery", () => {
+  const h = harness();
+  trackUndoToastFocus(h);
+  seedTreasury(h, [payment("a", h.day(1)), payment("b", h.day(2))]);
+  const a = h.run('deleteMovement("a")');
+  h.advanceTime(2000);
+  const b = h.run('deleteMovement("b")');
+  h.run('els.undoToasts.querySelectorAll("[data-undo-delete]").find(button => button.dataset.undoDelete === input).focus();', b);
+  h.advanceTime(3000);
+  assert.equal(h.run("state.undoDeletions.has(input)", a), false);
+  assert.equal(h.run("state.undoDeletions.has(input)", b), true);
+  assert.equal(h.run("document.activeElement.dataset.undoDelete"), b);
+  h.run("undoDeleteMovement(document.activeElement.dataset.undoDelete);");
+  assert.deepEqual(h.json("state.custom.movements.map(m => m.id)"), ["b"]);
+});
+
+test("EXT undo focus: expiry leaves unrelated focus alone and moves an expired button to search", () => {
+  const h = harness();
+  trackUndoToastFocus(h);
+  seedTreasury(h, [payment("a", h.day(1)), payment("b", h.day(2))]);
+  h.run('deleteMovement("a"); document.activeElement = els.movementConcept;');
+  h.advanceTime(5000);
+  assert.equal(h.run("document.activeElement === els.movementConcept"), true);
+  const b = h.run('deleteMovement("b")');
+  h.run('els.undoToasts.querySelectorAll("[data-undo-delete]").find(button => button.dataset.undoDelete === input).focus();', b);
+  h.advanceTime(5000);
+  assert.equal(h.run("document.activeElement === els.movementSearch"), true);
+});
+
+test("EXT reset: storage rejection preserves current data, selection and live undo tokens", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1)), payment("b", h.day(2))]);
+  const token = h.run('deleteMovement("a")');
+  h.run('state.selectedMovementIds.add("b");');
+  const before = h.json("state.custom");
+  const recovery = h.json("[...state.undoDeletions.entries()]");
+  const timers = [...h.timers.keys()];
+  const remove = h.storage.removeItem;
+  h.storage.removeItem = () => { throw new Error("Synthetic removeItem failure"); };
+  assert.doesNotThrow(() => h.run("resetCustomProjection();"));
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.deepEqual(h.saved(), before);
+  assert.deepEqual(h.json("[...state.selectedMovementIds]"), ["b"]);
+  assert.deepEqual(h.json("[...state.undoDeletions.entries()]"), recovery);
+  assert.deepEqual([...h.timers.keys()], timers);
+  assert.match(h.run("els.captureFeedback.textContent"), /No se pudo restablecer/);
+  h.storage.removeItem = remove;
+  h.run("undoDeleteMovement(input)", token);
+  assert.deepEqual(h.json("state.custom.movements.map(m => m.id).sort()"), ["a", "b"]);
+});
+
+test("EXT reset: a successful reset clears stored data and every pending recovery timer", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1)), payment("b", h.day(2)), payment("c", h.day(3))]);
+  h.run('deleteMovement("a"); deleteMovement("b"); state.selectedMovementIds.add("c");');
+  assert.equal(h.timers.size, 2);
+  h.run("resetCustomProjection();");
+  assert.equal(h.storage.getItem(STORAGE_KEY), null);
+  assert.equal(h.run("state.custom.accounts.length"), 1);
+  assert.equal(h.run("state.custom.accounts[0].balance"), 0);
+  assert.deepEqual(h.json("state.custom.movements"), []);
+  assert.equal(h.run("state.selectedMovementIds.size"), 0);
+  assert.equal(h.run("state.undoDeletions.size"), 0);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.run("els.undoToasts.innerHTML"), "");
+});
+
+test("EXT reset: declining confirmation preserves persisted data and recoveries", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1)), payment("b", h.day(2))]);
+  h.run('deleteMovement("a"); state.selectedMovementIds.add("b"); window.confirm = () => false;');
+  const before = h.json("state.custom");
+  const recovery = h.json("[...state.undoDeletions.entries()]");
+  h.run("resetCustomProjection();");
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.deepEqual(h.saved(), before);
+  assert.deepEqual(h.json("[...state.selectedMovementIds]"), ["b"]);
+  assert.deepEqual(h.json("[...state.undoDeletions.entries()]"), recovery);
+  assert.equal(h.timers.size, 1);
+});
+
