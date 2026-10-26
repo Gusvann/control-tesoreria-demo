@@ -101,7 +101,10 @@ function harness(saved, options = {}) {
   const storage = {
     writes: 0,
     fail: false,
-    getItem: (key) => values.get(key) ?? null,
+    getItem: (key) => {
+      if (options.storageReadFails) throw new Error("Storage access denied");
+      return values.get(key) ?? null;
+    },
     setItem(key, value) {
       if (this.fail) throw new Error("Synthetic storage failure");
       this.writes += 1;
@@ -2283,4 +2286,28 @@ test("STABILITY: export rows retain bank IDs, while an unassigned payment export
   assert.equal(rows[0].bankId, "bank-a");
   assert.equal(rows[1].bankId, "");
   assert.equal(rows[1].bank, "");
+});
+
+test("STABILITY: blocked localStorage reads never prevent loading the example", () => {
+  const h = harness(undefined, { storageReadFails: true });
+  assert.equal(h.run("state.scenarioStorageBlocked"), true);
+  assert.match(h.run("state.scenarioLoadError"), /almacenamiento/i);
+  assert.equal(h.run("state.mode"), "demo");
+  assert.equal(h.run("getActiveMovements().length"), 13);
+  assert.throws(() => h.run("commitWorkspace(state.custom, [], 'base')"), /almacenamiento/i);
+});
+
+test("STABILITY: opening across midnight refreshes the projection date and excludes yesterday", () => {
+  const h = harness();
+  const previous = h.day();
+  const future = h.day(1);
+  seedTreasury(h, [payment("today-movement", previous), payment("tomorrow-movement", future)]);
+  h.run("initialize();");
+  h.elements.get("#customModeButton").emit("click");
+  assert.deepEqual(h.json("getFilteredMovements().map(m => m.id)"), ["today-movement", "tomorrow-movement"]);
+  h.advanceTime(86400000);
+  assert.equal(h.run("todayISO"), future);
+  assert.equal(h.run("els.projectionStart.value"), future);
+  assert.equal(h.run("els.movementDate.min"), future);
+  assert.deepEqual(h.json("getFilteredMovements().map(m => m.id)"), ["tomorrow-movement"]);
 });
