@@ -2311,3 +2311,25 @@ test("STABILITY: opening across midnight refreshes the projection date and exclu
   assert.equal(h.run("els.movementDate.min"), future);
   assert.deepEqual(h.json("getFilteredMovements().map(m => m.id)"), ["tomorrow-movement"]);
 });
+
+test("STABILITY: reverse-sequence removals restore original order in any undo order", () => {
+  for (const undoOrder of [["a", "b"], ["b", "a"]]) {
+    const h = harness();
+    seedTreasury(h, ["a","b","c","d"].map((id, n) => payment(id, h.day(n + 1))));
+    const tokens = { b: h.run('deleteMovement("b")'), a: h.run('deleteMovement("a")') };
+    for (const id of undoOrder) h.run("undoDeleteMovement(input)", tokens[id]);
+    assert.deepEqual(h.json("state.custom.movements.map(m => m.id)"), ["a", "b", "c", "d"]);
+  }
+});
+
+test("STABILITY: overlapping three deletions restore original order in a scrambled order", () => {
+  const h = harness();
+  seedTreasury(h, ["a","b","c","d","e"].map((id, n) => payment(id, h.day(n + 1))));
+  const tokens = {
+    b: h.run('deleteMovement("b")'),
+    a: h.run('deleteMovement("a")'),
+    c: h.run('deleteMovement("c")'),
+  };
+  for (const id of ["c", "b", "a"]) h.run("undoDeleteMovement(input)", tokens[id]);
+  assert.deepEqual(h.json("state.custom.movements.map(m => m.id)"), ["a","b","c","d","e"]);
+});
