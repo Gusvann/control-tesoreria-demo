@@ -10,9 +10,9 @@
   const NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
   const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
   const PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relationships";
-  const HEADERS = ["Fecha", "Concepto", "Tipo", "Estatus", "Importe (MXN)", "Banco", "Categoría", "Banco origen", "Banco destino", "ID"];
-  const WIDTHS = [14, 44, 16, 20, 28, 28, 22, 28, 28, 44];
-  const TEXT_FIELDS = ["concept", "type", "status", "bank", "category", "fromBank", "toBank", "id"];
+  const HEADERS = ["Fecha", "Concepto", "Tipo", "Estatus", "Importe (MXN)", "Banco", "Categoría", "Banco origen", "Banco destino", "ID", "ID banco", "ID banco origen", "ID banco destino"];
+  const WIDTHS = [14, 44, 16, 20, 28, 28, 22, 28, 28, 44, 42, 42, 42];
+  const TEXT_FIELDS = ["concept", "type", "status", "bank", "category", "fromBank", "toBank", "id", "bankId", "fromBankId", "toBankId"];
   // Positive; negative; zero; text. Fill spaces align the MXN label separately
   // from the amount, while padding aligns parentheses and decimal positions.
   // https://support.microsoft.com/en-us/excel/review-guidelines-for-customizing-a-number-format
@@ -85,12 +85,15 @@
         stringCell(`H${line}`, text.fromBank),
         stringCell(`I${line}`, text.toBank),
         stringCell(`J${line}`, text.id),
+        stringCell(`K${line}`, text.bankId),
+        stringCell(`L${line}`, text.fromBankId),
+        stringCell(`M${line}`, text.toBankId),
       ];
       return `<row r="${line}">${values.join("")}</row>`;
     }).join("");
     const lastRow = rows.length + 1;
     const columns = WIDTHS.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("");
-    return `${XML}<worksheet xmlns="${NS}"><dimension ref="A1:J${lastRow}"/>`
+    return `${XML}<worksheet xmlns="${NS}"><dimension ref="A1:M${lastRow}"/>`
       + '<sheetViews><sheetView showGridLines="0" workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>'
       + `<sheetFormatPr defaultRowHeight="20"/><cols>${columns}</cols><sheetData><row r="1" ht="32" customHeight="1">${header}</row>${dataRows}</sheetData>`
       + `<autoFilter ref="A1:J${lastRow}"/><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`;
