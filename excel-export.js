@@ -96,7 +96,7 @@
     return `${XML}<worksheet xmlns="${NS}"><dimension ref="A1:M${lastRow}"/>`
       + '<sheetViews><sheetView showGridLines="0" workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>'
       + `<sheetFormatPr defaultRowHeight="20"/><cols>${columns}</cols><sheetData><row r="1" ht="32" customHeight="1">${header}</row>${dataRows}</sheetData>`
-      + `<autoFilter ref="A1:J${lastRow}"/><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`;
+      + `<autoFilter ref="A1:M${lastRow}"/><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`;
   }
 
   function stylesXML() {
