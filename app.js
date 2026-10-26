@@ -741,8 +741,12 @@ function getMovementCashImpact(movement) {
 }
 
 function getAccountTransferNet(bankId, movements) {
-  return movements.reduce((total, movement) => movement.type !== "transfer" ? total
-    : total + (movement.toBankId === bankId ? movement.amount : 0) - (movement.fromBankId === bankId ? movement.amount : 0), 0);
+  const cents = movements.reduce((total, movement) => {
+    if (movement.type !== "transfer") return total;
+    const amount = Math.round(movement.amount * 100);
+    return total + (movement.toBankId === bankId ? amount : 0) - (movement.fromBankId === bankId ? amount : 0);
+  }, 0);
+  return cents / 100;
 }
 
 function isValidMovementAmount(amount) {
@@ -895,20 +899,21 @@ function updateMovementSelection() {
 }
 
 function getSelectionTotals(movements) {
-  const totals = { count: movements.length, inflows: 0, outflows: 0, transfers: 0, net: 0 };
+  const cents = { inflows: 0, outflows: 0, transfers: 0 };
   movements.forEach((movement) => {
-    if (movement.type === "inflow") totals.inflows += movement.amount;
-    else if (movement.type === "outflow") totals.outflows += movement.amount;
-    else if (movement.type === "transfer") totals.transfers += movement.amount;
+    const amount = Math.round(movement.amount * 100);
+    if (movement.type === "inflow") cents.inflows += amount;
+    else if (movement.type === "outflow") cents.outflows += amount;
+    else if (movement.type === "transfer") cents.transfers += amount;
   });
-  totals.net = totals.inflows - totals.outflows;
-  return totals;
+  return { count: movements.length, inflows: cents.inflows / 100, outflows: cents.outflows / 100,
+    transfers: cents.transfers / 100, net: (cents.inflows - cents.outflows) / 100 };
 }
 
 function getPaymentGroups(movements = getVisibleMovements()) {
   return [...CATEGORY_OPTIONS, { id: "", label: "Sin categoría" }].map((category) => {
     const entries = movements.filter((movement) => movement.type === "outflow" && getMovementCategoryId(movement) === category.id);
-    return { ...category, movements: entries, total: entries.reduce((sum, movement) => sum + movement.amount, 0) };
+    return { ...category, movements: entries, total: entries.reduce((sum, movement) => sum + Math.round(movement.amount * 100), 0) / 100 };
   }).filter((group) => group.movements.length || group.id === "");
 }
 
@@ -1294,19 +1299,18 @@ function handleCaptureKeydown(event) {
 }
 
 function getPeriodTotals(filteredMovements) {
-  return filteredMovements.reduce(
-    (totals, movement) => {
-      if (movement.type === "inflow") {
-        totals.inflows += movement.amount;
-        totals.inflowCount += 1;
-      } else if (movement.type === "outflow") {
-        totals.outflows += movement.amount;
-        totals.outflowCount += 1;
-      }
-      return totals;
-    },
-    { inflows: 0, outflows: 0, inflowCount: 0, outflowCount: 0 },
-  );
+  const cents = filteredMovements.reduce((totals, movement) => {
+    if (movement.type === "inflow") {
+      totals.inflows += Math.round(movement.amount * 100);
+      totals.inflowCount += 1;
+    } else if (movement.type === "outflow") {
+      totals.outflows += Math.round(movement.amount * 100);
+      totals.outflowCount += 1;
+    }
+    return totals;
+  }, { inflows: 0, outflows: 0, inflowCount: 0, outflowCount: 0 });
+  return { inflows: cents.inflows / 100, outflows: cents.outflows / 100,
+    inflowCount: cents.inflowCount, outflowCount: cents.outflowCount };
 }
 
 function getForecastSeries(filteredMovements, startingBalance) {
@@ -1622,9 +1626,9 @@ function renderKpis(accounts, filteredMovements, totals, forecastSeries) {
 
   const pendingIncluded = filteredMovements.filter((movement) => movement.status === "pending");
   const pendingNet = pendingIncluded.reduce(
-    (sum, movement) => sum + getMovementCashImpact(movement),
+    (sum, movement) => sum + Math.round(getMovementCashImpact(movement) * 100),
     0,
-  );
+  ) / 100;
 
   els.pendingCount.textContent = state.includePending ? `${pendingIncluded.length} incluidos` : "No incluidos";
   els.pendingAmount.textContent = state.includePending
