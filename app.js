@@ -58,6 +58,11 @@ const state = {
 
 loadSavedScenarios();
 
+// Snapshot of the latest state read or written by this tab. Never overwrite
+// changes from another tab silently.
+let lastPersistedSnapshot = localStorage.getItem(STORAGE_KEY);
+
+
 const els = {
   savedScenariosPanel: document.querySelector("#savedScenariosPanel"),
   scenarioSelect: document.querySelector("#scenarioSelect"),
@@ -551,8 +556,15 @@ function commitWorkspace(base, scenarios, activeId) {
     ? { ...base, scenarioVersion: 1, savedScenarios: scenarios, activeScenarioId: activeId }
     : base;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    const currentSnapshot = localStorage.getItem(STORAGE_KEY);
+    if (currentSnapshot !== lastPersistedSnapshot) {
+      throw new Error("Otra pestaña modificó la proyección. Recarga esta página antes de guardar para evitar sobrescribir cambios.");
+    }
+    const nextSnapshot = JSON.stringify(payload);
+    localStorage.setItem(STORAGE_KEY, nextSnapshot);
+    lastPersistedSnapshot = nextSnapshot;
   } catch (error) {
+    if (error.message?.includes("Otra pestaña")) throw error;
     throw new Error("No se pudo guardar en este navegador. Los datos no se modificaron. Revisa el espacio o los permisos de almacenamiento e intenta de nuevo.");
   }
   state.scenarioBase = base;
@@ -2071,7 +2083,10 @@ function deleteMovement(id) {
   const movement = { ...matches[0] };
   persistCustomCandidate({ ...state.custom, movements: state.custom.movements.filter((entry) => entry.id !== id) });
   const token = createId("undo");
-  const entry = { movement, index, scenarioId: state.activeScenarioId, expiresAt: Date.now() + 5000 };
+  const originalRows = state.custom.movements;
+  const entry = { movement, index, beforeId: originalRows[index - 1]?.id ?? null,
+    afterId: originalRows[index + 1]?.id ?? null,
+    scenarioId: state.activeScenarioId, expiresAt: Date.now() + 5000 };
   state.undoDeletions.set(token, entry);
   entry.timer = setTimeout(() => expireUndoDeletion(token), 5000);
   state.selectedMovementIds.delete(id);
@@ -2118,7 +2133,10 @@ function undoDeleteMovement(token, now = Date.now()) {
   }
   if (entry.movement.type === "transfer") validateTransfer(entry.movement, state.custom.accounts);
   const movements = [...state.custom.movements];
-  movements.splice(Math.min(entry.index, movements.length), 0, entry.movement);
+  const before = entry.beforeId ? movements.findIndex((item) => item.id === entry.beforeId) : -1;
+  const after = entry.afterId ? movements.findIndex((item) => item.id === entry.afterId) : -1;
+  const insertion = after >= 0 ? after : before >= 0 ? before + 1 : Math.min(entry.index, movements.length);
+  movements.splice(insertion, 0, entry.movement);
   persistCustomCandidate({ ...state.custom, movements });
   expireUndoDeletion(token);
   renderBuilder();
@@ -2973,6 +2991,13 @@ function bindEvents() {
 
   els.resetProjection.addEventListener("click", resetCustomProjection);
 }
+
+// Inform the user about an external change, even before the next save attempt.
+window.addEventListener?.("storage", (event) => {
+  if (event.key !== STORAGE_KEY || event.newValue === lastPersistedSnapshot) return;
+  els.captureFeedback.textContent = "Otra pestaña actualizó la proyección. Recarga para ver sus cambios; no se sobrescribirán.";
+  if (els.scenarioFeedback) els.scenarioFeedback.textContent = "Hay cambios externos. Recarga antes de guardar.";
+});
 
 function initialize() {
   els.projectionStart.value = todayISO;
