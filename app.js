@@ -368,7 +368,8 @@ function finishMoneyInput(input) {
       else input.value = TreasuryAccounting.inputValue(commitBankBalance(account.id, input.value, input.dataset.scenarioId));
       els.initialTotal.textContent = currency.format(getAvailableBalance(state.custom.accounts));
       els.captureFeedback.textContent = "";
-      renderDashboard();
+      // A blur can precede the click on a movement action. Preserve its DOM node.
+      renderDashboard({ preserveMovementRows: true });
     } else {
       const original = input === els.editMovementAmount && state.movementEdit?.ids.length === 1 ? state.movementEdit.original[0].amount : undefined;
       const value = readMoneyInput(input, original);
@@ -1297,25 +1298,26 @@ function getForecastSeries(filteredMovements, startingBalance) {
     movementMap.set(day, existing);
   });
 
-  let runningBalance = startingBalance;
-  const series = [{ day: 0, date: today, balance: runningBalance, movements: movementMap.get(0) ?? [] }];
+  // Store the running position in integer cents: zero must never be a
+  // negative floating-point residue that triggers a false cash shortfall.
+  let runningCents = Math.round(startingBalance * 100);
+  const series = [{ day: 0, date: today, balance: runningCents / 100, movements: movementMap.get(0) ?? [] }];
 
-  const dayZeroMovements = movementMap.get(0) ?? [];
-  dayZeroMovements.forEach((movement) => {
-    runningBalance += getMovementCashImpact(movement);
-  });
-  series[0].balance = runningBalance;
+  const applyMovements = (movements) => {
+    movements.forEach((movement) => {
+      runningCents += Math.round(getMovementCashImpact(movement) * 100);
+    });
+    return runningCents / 100;
+  };
+
+  series[0].balance = applyMovements(movementMap.get(0) ?? []);
 
   for (let day = 1; day <= state.horizon; day += 1) {
     const dayMovements = movementMap.get(day) ?? [];
-    dayMovements.forEach((movement) => {
-      runningBalance += getMovementCashImpact(movement);
-    });
-
     series.push({
       day,
       date: addDays(today, day),
-      balance: runningBalance,
+      balance: applyMovements(dayMovements),
       movements: dayMovements,
     });
   }
@@ -1977,7 +1979,7 @@ function renderChart(series, options = {}) {
   `;
 }
 
-function renderDashboard() {
+function renderDashboard({ preserveMovementRows = false } = {}) {
   const accounts = getActiveAccounts();
   const filteredMovements = getFilteredMovements();
   const totals = getPeriodTotals(filteredMovements);
@@ -1987,7 +1989,7 @@ function renderDashboard() {
   renderAccounts(accounts);
   renderKpis(accounts, filteredMovements, totals, forecastSeries);
   renderInsights(filteredMovements, forecastSeries);
-  renderMovements();
+  if (!preserveMovementRows) renderMovements();
   const hasChartData = startingBalance !== 0 || filteredMovements.length > 0;
   renderChart(forecastSeries, { hasData: hasChartData });
   if (state.mode === "custom") renderSavedScenarios();
