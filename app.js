@@ -245,21 +245,15 @@ const els = {
   liveRegion: document.querySelector("#liveRegion"),
 };
 
-const currency = new Intl.NumberFormat("es-MX", {
-  style: "currency",
-  currency: "MXN",
-  maximumFractionDigits: 0,
-});
-
-const detailCurrency = new Intl.NumberFormat("es-MX", {
-  style: "currency", currency: "MXN", minimumFractionDigits: 2, maximumFractionDigits: 2,
-});
+const currency = { format: TreasuryAccounting.format };
+const detailCurrency = currency;
 
 const compactCurrency = new Intl.NumberFormat("es-MX", {
   style: "currency",
   currency: "MXN",
   notation: "compact",
-  maximumFractionDigits: 1,
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
 });
 
 const shortDate = new Intl.DateTimeFormat("es-MX", {
@@ -325,6 +319,85 @@ function escapeHTML(value) {
 function toSafeNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
+function readMoneyInput(input, originalValue) {
+  // An untouched legacy value must not be rounded by an unrelated edit.
+  if (originalValue !== undefined && [TreasuryAccounting.inputValue(originalValue), String(originalValue), TreasuryAccounting.editingValue(originalValue)].includes(input.value)) return originalValue;
+  return TreasuryAccounting.parseInput(input.value);
+}
+
+function setMoneyInputError(input, message = "") {
+  input.setCustomValidity(message);
+  if (message) input.setAttribute("aria-invalid", "true");
+  else input.removeAttribute("aria-invalid");
+  const error = input.dataset.moneyError ? document.querySelector(`#${input.dataset.moneyError}`) : null;
+  if (error) { error.textContent = message; error.hidden = !message; }
+}
+
+function focusMoneyInput(input) {
+  // Do not rewrite a focused field: focus/selection/paste may be one native action.
+  // The formatter runs only after editing has finished.
+  setMoneyInputError(input);
+}
+
+function commitBankBalance(bankId, rawValue, expectedScenarioId = state.activeScenarioId) {
+  requirePersonalScenario();
+  if (expectedScenarioId !== state.activeScenarioId) throw new Error("El escenario cambió. Revisa el saldo en el escenario actual.");
+  const accounts = state.custom.accounts.filter((account) => account.id === bankId);
+  if (accounts.length !== 1) throw new Error("No se puede identificar el banco de forma única.");
+  const value = TreasuryAccounting.parseInput(rawValue);
+  if (!Number.isFinite(value) || value < 0) throw new Error("Escribe un saldo desde cero, con hasta dos decimales y formato 1,234.50. El saldo anterior se conserva.");
+  if (value !== accounts[0].balance) {
+    persistCustomCandidate({ ...state.custom, accounts: state.custom.accounts.map((account) => account.id === bankId ? { ...account, balance: value } : account) });
+  }
+  return value;
+}
+
+function finishMoneyInput(input) {
+  const isBalance = input.dataset.moneyInput === "balance";
+  try {
+    if (!input.value.trim() && !isBalance) { setMoneyInputError(input); return; }
+    if (isBalance) {
+      const row = input.closest("[data-bank-id]");
+      const account = state.custom.accounts.find((item) => item.id === row?.dataset.bankId);
+      if (!account || input.dataset.scenarioId !== state.activeScenarioId || state.mode !== "custom") throw new Error("El banco o el escenario cambió. Revisa el saldo en el destino actual.");
+      const value = readMoneyInput(input, account.balance);
+      // Keep pre-existing precision when merely entering/leaving the field.
+      if (value === account.balance) input.value = TreasuryAccounting.inputValue(account.balance);
+      else input.value = TreasuryAccounting.inputValue(commitBankBalance(account.id, input.value, input.dataset.scenarioId));
+      els.initialTotal.textContent = currency.format(getAvailableBalance(state.custom.accounts));
+      els.captureFeedback.textContent = "";
+      renderDashboard();
+    } else {
+      const original = input === els.editMovementAmount && state.movementEdit?.ids.length === 1 ? state.movementEdit.original[0].amount : undefined;
+      const value = readMoneyInput(input, original);
+      if (!(original !== undefined && value === original) && (!Number.isFinite(value) || value <= 0)) throw new Error("Escribe un importe mayor a cero, con hasta dos decimales y formato 1,234.50.");
+      input.value = TreasuryAccounting.inputValue(value);
+    }
+    setMoneyInputError(input);
+  } catch (error) {
+    setMoneyInputError(input, error.message);
+    if (isBalance) els.captureFeedback.textContent = error.message;
+  }
+  if (input === els.editMovementAmount && state.movementEdit) updateMovementEditPreview();
+}
+
+function bindMoneyInputs() {
+  [els.movementAmount, els.editMovementAmount].forEach((input) => {
+    input.addEventListener("focus", () => focusMoneyInput(input));
+    input.addEventListener("blur", () => finishMoneyInput(input));
+    input.addEventListener("input", () => setMoneyInputError(input));
+  });
+  els.banksEditor.addEventListener("focusin", (event) => {
+    if (event.target.matches("[data-money-input]")) focusMoneyInput(event.target);
+  });
+  els.banksEditor.addEventListener("focusout", (event) => {
+    if (event.target.matches("[data-money-input]")) finishMoneyInput(event.target);
+  });
+  els.banksEditor.addEventListener("input", (event) => {
+    if (event.target.matches("[data-money-input]")) setMoneyInputError(event.target);
+  });
 }
 
 function createDefaultCustomState() {
@@ -583,6 +656,7 @@ function resetScenarioContext() {
   els.movementForm.reset();
   els.movementConcept.value = "";
   els.movementAmount.value = "";
+  setMoneyInputError(els.movementAmount);
   els.movementDate.value = todayISO;
   els.movementType.value = "inflow";
   els.movementStatus.value = "confirmed";
@@ -1023,7 +1097,7 @@ function getMovementEditPatch() {
   if (!els.editCategoryEnabled.disabled && els.editCategoryEnabled.checked) patch.categoryId = els.editMovementCategory.value;
   if (edit && edit.ids.length === 1) {
     patch.concept = els.editMovementConcept.value.trim();
-    patch.amount = Number(els.editMovementAmount.value);
+    patch.amount = readMoneyInput(els.editMovementAmount, edit.original[0].amount);
     if (edit.original[0].type === "transfer") {
       patch.fromBankId = els.editTransferFromBank.value;
       patch.toBankId = els.editTransferToBank.value;
@@ -1115,7 +1189,8 @@ function openMovementEditor(ids, opener = document.activeElement, kind = "edit")
   els.editMovementConcept.disabled = !single;
   els.editMovementAmount.disabled = !single;
   els.editMovementConcept.value = single ? first.concept : "";
-  els.editMovementAmount.value = single ? String(first.amount) : "";
+  els.editMovementAmount.value = single ? TreasuryAccounting.inputValue(first.amount) : "";
+  setMoneyInputError(els.editMovementAmount);
   const isTransfer = single && first.type === "transfer";
   els.editTransferFields.hidden = !isTransfer;
   [els.editTransferFromBank, els.editTransferToBank].forEach((select) => { select.disabled = !isTransfer; });
@@ -1396,15 +1471,21 @@ function renderBanksEditor() {
             />
           </div>
           <div class="field-group">
-            <label for="bank-balance-${index}">Saldo</label>
-            <input
+            <label for="bank-balance-${index}">Saldo (MXN)</label>
+            <div class="accounting-input"><span aria-hidden="true">$</span><input
               id="bank-balance-${index}"
-              type="number"
-              min="0"
-              step="0.01"
-              value="${account.balance}"
+              type="text"
+              inputmode="decimal"
+              autocomplete="off"
+              spellcheck="false"
+              value="${escapeHTML(TreasuryAccounting.inputValue(account.balance))}"
               data-field="balance"
-            />
+              data-money-input="balance"
+              data-money-error="bank-balance-error-${index}"
+              data-scenario-id="${escapeHTML(state.activeScenarioId)}"
+              aria-describedby="bank-balance-help bank-balance-error-${index}"
+            /></div>
+            <p class="money-input-error" id="bank-balance-error-${index}" role="alert" hidden></p>
           </div>
         </div>
       `,
@@ -1438,7 +1519,7 @@ function renderCaptureList() {
             <small>${shortDate.format(parseISODate(movement.date))} · ${typeLabel} · ${statusLabel}${accountLabel ? ` · ${escapeHTML(accountLabel)}` : ""}${categoryLabel ? ` · ${categoryLabel}` : ""}</small>
           </div>
           <span class="capture-amount ${isTransfer ? "amount-transfer" : isInflow ? "amount-in" : "amount-out"}">
-            ${isTransfer ? "↔ " : isInflow ? "+" : "−"}${detailCurrency.format(movement.amount)}
+            ${isTransfer ? "↔ " : ""}${detailCurrency.format(isInflow || isTransfer ? movement.amount : -movement.amount)}
           </span>
           <div class="capture-item-actions">
             <button class="capture-edit-button" type="button"
@@ -1514,7 +1595,7 @@ function renderKpis(accounts, filteredMovements, totals, forecastSeries) {
   els.projectedBalance.textContent = currency.format(projectedBalance);
   els.inflowCount.textContent = `${totals.inflowCount} ${totals.inflowCount === 1 ? "cobro considerado" : "cobros considerados"}`;
   els.outflowCount.textContent = `${totals.outflowCount} ${totals.outflowCount === 1 ? "pago considerado" : "pagos considerados"}`;
-  els.projectedDelta.textContent = `${delta >= 0 ? "+" : ""}${currency.format(delta)} frente al saldo actual`;
+  els.projectedDelta.textContent = `${currency.format(delta)} frente al saldo actual`;
 
   const pendingIncluded = filteredMovements.filter((movement) => movement.status === "pending");
   const pendingNet = pendingIncluded.reduce(
@@ -1524,7 +1605,7 @@ function renderKpis(accounts, filteredMovements, totals, forecastSeries) {
 
   els.pendingCount.textContent = state.includePending ? `${pendingIncluded.length} incluidos` : "No incluidos";
   els.pendingAmount.textContent = state.includePending
-    ? `Efecto neto de ${pendingNet >= 0 ? "+" : ""}${currency.format(pendingNet)}`
+    ? `Efecto neto de ${currency.format(pendingNet)}`
     : "Activa el interruptor para simularlos";
 }
 
@@ -1574,7 +1655,7 @@ function renderMovements() {
     .map((movement) => {
       const isInflow = movement.type === "inflow";
       const isTransfer = movement.type === "transfer";
-      const amountSign = isTransfer ? "↔ " : isInflow ? "+" : "−";
+      const amountSign = isTransfer ? "↔ " : "";
       const statusLabel = movement.status === "confirmed" ? "Confirmado" : "Por confirmar";
       const statusClass = movement.status === "confirmed" ? "status-confirmed" : "status-pending";
 
@@ -1588,7 +1669,7 @@ function renderMovements() {
           <td role="cell" data-label="Tipo">${getMovementTypeLabel(movement)}</td>
           <td role="cell" data-label="Estatus"><span class="status ${statusClass}">${statusLabel}</span></td>
           <td role="cell" data-label="Importe" class="align-right amount ${isTransfer ? "amount-transfer" : isInflow ? "amount-in" : "amount-out"}">
-            ${amountSign}${detailCurrency.format(movement.amount)}
+            ${amountSign}${detailCurrency.format(isInflow || isTransfer ? movement.amount : -movement.amount)}
           </td>
           <td role="cell" data-label="Acciones" class="movement-row-actions"><button type="button" class="movement-edit-button"
             data-edit-movement="${escapeHTML(movement.id)}"
@@ -1769,14 +1850,10 @@ function formatChartAxisValue(value) {
   const normalized = Math.abs(value) < 0.000001 ? 0 : value;
 
   if (Math.abs(normalized) >= 1000000) {
-    return compactCurrency.format(normalized);
+    const label = compactCurrency.format(Math.abs(normalized));
+    return normalized < 0 ? `(${label})` : label;
   }
-
-  return new Intl.NumberFormat("es-MX", {
-    style: "currency",
-    currency: "MXN",
-    maximumFractionDigits: Math.abs(normalized) < 100 ? 2 : 0,
-  }).format(normalized);
+  return currency.format(normalized);
 }
 
 function updateChartScaleControls() {
@@ -1821,7 +1898,7 @@ function renderChart(series, options = {}) {
 
   const width = 1000;
   const height = 340;
-  const margin = { top: 24, right: 24, bottom: 48, left: 98 };
+  const margin = { top: 24, right: 24, bottom: 48, left: 126 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
   const { yMin, yMax, tickValues } = getChartScale(series);
@@ -1926,7 +2003,7 @@ function addMovement(event) {
   els.captureFeedback.textContent = "";
 
   const concept = els.movementConcept.value.trim();
-  const amount = Number(els.movementAmount.value);
+  const amount = TreasuryAccounting.parseInput(els.movementAmount.value);
   const date = els.movementDate.value;
   const type = ["outflow", "transfer"].includes(els.movementType.value) ? els.movementType.value : "inflow";
   const bankId = type === "outflow" ? els.movementBank.value : "";
@@ -1971,6 +2048,7 @@ function addMovement(event) {
   }
   els.captureFeedback.textContent = "Movimiento agregado a la proyección.";
   els.movementForm.reset();
+  setMoneyInputError(els.movementAmount);
   els.movementDate.value = todayISO;
   els.movementType.value = "inflow";
   els.movementStatus.value = "confirmed";
@@ -2482,7 +2560,7 @@ function renderSavedScenarios() {
   const deltaLabel = (value) => {
     const rounded = Math.round(value * 100) / 100;
     return rounded === 0 ? `${detailCurrency.format(0)} · sin cambio frente a Base`
-      : `${rounded > 0 ? "+" : ""}${detailCurrency.format(rounded)} frente a Base`;
+      : `${detailCurrency.format(rounded)} frente a Base`;
   };
   els.scenarioComparisonHelp.textContent = `Del ${dateLabel(todayISO)} al ${dateLabel(toISODate(addDays(today, state.horizon)))}. `
     + `Movimientos por confirmar ${state.includePending ? "incluidos" : "excluidos"} en todos los escenarios. Los filtros de movimientos no cambian esta comparación.`;
@@ -2732,6 +2810,7 @@ function bindScenarioEvents() {
 
 
 function bindEvents() {
+  bindMoneyInputs();
   bindImportEvents();
   bindScenarioEvents();
   els.demoModeButton.addEventListener("click", () => setMode("demo"));
@@ -2789,8 +2868,8 @@ function bindEvents() {
       return;
     }
 
-    if (!["balance", "name"].includes(field)) return;
-    const value = field === "balance" ? toSafeNumber(event.target.value) : event.target.value.slice(0, 50) || "Banco";
+    if (field !== "name") return;
+    const value = event.target.value.slice(0, 50) || "Banco";
     try {
       persistCustomCandidate({ ...state.custom, accounts: state.custom.accounts.map((item) => item.id === account.id ? { ...item, [field]: value } : item) });
       els.captureFeedback.textContent = "";

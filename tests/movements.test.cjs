@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const importModule = require("../treasury-import.js");
+const accountingModule = require("../accounting.js");
 
 const script = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 assert.match(script, /\binitialize\(\);\s*$/u, "The application must retain its final initialize() call.");
@@ -120,6 +121,7 @@ function harness(saved, options = {}) {
     TextDecoder,
     TextEncoder,
     TreasuryImport: options.importer || importModule,
+    TreasuryAccounting: accountingModule,
     crypto: { randomUUID: () => `synthetic-${harnessId}-${++nextId}` },
     localStorage: storage,
     document: {
@@ -856,12 +858,12 @@ test("EXT horizon: 60 and 90 days include their endpoint and exclude the followi
   assert.equal(h.run("toISODate(getForecastSeries(getFilteredMovements(), getAvailableBalance()).at(-1).date)"), h.day(90));
 });
 
-test("EXT detail: movement amounts retain two decimals while KPIs keep their existing formatting", () => {
+test("EXT detail: movement amounts and monetary KPIs retain two decimals", () => {
   const h = harness();
   assert.equal(h.run("detailCurrency.format(100.49)"), "$100.49");
   assert.equal(h.run("detailCurrency.format(100)"), "$100.00");
   assert.equal(h.run("detailCurrency.format(0.01)"), "$0.01");
-  assert.equal(h.run("currency.format(100.49)"), "$100");
+  assert.equal(h.run("currency.format(100.49)"), "$100.49");
 });
 
 test("EXT categories: used payment categories follow the catalog and unassigned is always last", () => {
@@ -1969,5 +1971,241 @@ test("IMP integration: large exact cents accepted in preview can commit while th
   }
   assert.deepEqual(h.json("state.custom"), before);
   assert.equal(h.storage.writes, writes);
+});
+
+// Accounting presentation is shared with the real formatting module. These
+// contracts exercise app boundaries where text must remain numeric money;
+// exhaustive parsing/formatting cases belong to accounting.test.cjs.
+test("ACC capture: grouped and currency-prefixed amounts persist as numbers without losing cents", () => {
+  for (const value of ["1,234.50", "$1,234.50", "MXN $ 1,234.50"]) {
+    const h = harness();
+    seed(h, []);
+    h.run('els.movementDate.value = input.date; els.movementConcept.value = "Pago contable"; els.movementAmount.value = input.value; els.movementType.value = "outflow"; els.movementStatus.value = "confirmed";', { date: h.day(1), value });
+    h.run("addMovement(input)", { preventDefault() {} });
+    assert.equal(h.run("state.custom.movements.length"), 1, value);
+    assert.equal(h.saved().movements[0].amount, 1234.5, value);
+    assert.equal(typeof h.saved().movements[0].amount, "number");
+    assert.equal(h.saved().movements[0].type, "outflow");
+    assert.equal(h.storage.writes, 1);
+  }
+});
+
+test("ACC capture: malformed, negative and overprecise text preserves the draft without saving zero", () => {
+  const h = harness();
+  seed(h, [movement("existing", h.day(1))]);
+  const before = h.json("state.custom");
+  for (const value of ["1,23", "1.234,56", "1.001", "($1,234.50)", "", "texto"]) {
+    h.run('els.movementDate.value = input.date; els.movementConcept.value = "Borrador contable"; els.movementAmount.value = input.value; els.movementType.value = "outflow";', { date: h.day(1), value });
+    h.run("addMovement(input)", { preventDefault() {} });
+    assert.deepEqual(h.json("state.custom"), before, value);
+    assert.equal(h.run("els.movementAmount.value"), value);
+    assert.equal(h.run("els.movementConcept.value"), "Borrador contable");
+    assert.notEqual(h.run("els.captureFeedback.textContent"), "");
+  }
+  assert.equal(h.storage.writes, 0);
+  assert.equal(h.run("els.movementForm.resetCount || 0"), 0);
+});
+
+test("ACC editor: formatted original is a no-op and a grouped replacement keeps cents and identity", () => {
+  const h = harness();
+  const original = payment("p", h.day(1), { amount: 1234567.89, bankId: "bank-a", categoryId: "costos" });
+  seedTreasury(h, [original]);
+  h.run('openMovementEditor(["p"]);');
+  assert.equal(h.run("els.editMovementAmount.value"), "1,234,567.89");
+  assert.deepEqual(h.json("getMovementEditPatch()"), {});
+  assert.equal(h.storage.writes, 0);
+  h.run('els.editMovementAmount.value = "$2,345.67"; submitMovementEdit(input);', { preventDefault() {} });
+  assert.deepEqual(h.saved().movements, [{ ...original, amount: 2345.67 }]);
+  assert.equal(h.storage.writes, 1);
+});
+
+test("ACC duplicate: editing the formatted copy creates a numeric amount and preserves the source", () => {
+  const h = harness();
+  const original = payment("p", h.day(1), { amount: 1234.5, bankId: "bank-b", categoryId: "gastos" });
+  seedTreasury(h, [original]);
+  h.run('openMovementEditor(["p"], undefined, "duplicate");');
+  assert.equal(h.run("els.editMovementAmount.value"), "1,234.50");
+  h.run('els.editMovementAmount.value = "9,876.54"; els.editMovementConcept.value = "Copia contable"; submitMovementEdit(input);', { preventDefault() {} });
+  const rows = h.saved().movements;
+  assert.deepEqual(rows[0], original);
+  assert.equal(rows.length, 2);
+  assert.notEqual(rows[1].id, original.id);
+  assert.deepEqual({ ...rows[1], id: original.id }, { ...original, concept: "Copia contable", amount: 9876.54 });
+  assert.equal(h.storage.writes, 1);
+});
+
+test("ACC legacy: changing status alone never rounds an untouched legacy amount", () => {
+  const legacy = { accounts: [{ id: "bank-legacy", name: "Banco anterior", balance: 100.123 }],
+    movements: [payment("legacy", "2028-05-01", { amount: 12.345 })] };
+  const h = harness(legacy);
+  h.run('state.mode = "custom"; openMovementEditor(["legacy"]); els.editMovementStatus.value = "pending";');
+  assert.deepEqual(h.json("getMovementEditPatch()"), { status: "pending" });
+  h.run("submitMovementEdit(input)", { preventDefault() {} });
+  assert.equal(h.saved().movements[0].amount, 12.345);
+  assert.equal(h.saved().movements[0].status, "pending");
+  assert.equal(h.saved().accounts[0].balance, 100.123);
+  assert.equal(h.storage.writes, 1);
+});
+
+test("ACC bank: accounting text and an explicit accounting zero update only the chosen balance", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  const before = h.json("state.custom");
+  assert.equal(h.run('commitBankBalance("bank-b", "$1,234.50")'), 1234.5);
+  assert.deepEqual(h.saved(), { ...before,
+    accounts: before.accounts.map(account => account.id === "bank-b" ? { ...account, balance: 1234.5 } : account) });
+  assert.equal(h.storage.writes, 1);
+  assert.equal(h.run('commitBankBalance("bank-b", "$—")'), 0);
+  assert.equal(h.saved().accounts[1].balance, 0);
+  assert.deepEqual(h.saved().movements, before.movements);
+  assert.equal(h.storage.writes, 2);
+});
+
+test("ACC bank: invalid or missing-bank edits cannot replace a balance with zero or a rounded value", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  h.run("persistCustomCandidate(state.custom);");
+  const before = h.json("state.custom");
+  const writes = h.storage.writes;
+  for (const value of ["", "-", "1,23", "1.001", "1.234,56", "texto", "($1.00)", "10,000,000,000,000.00"]) {
+    assert.throws(() => h.run('commitBankBalance("bank-b", input)', value), undefined, value);
+    assert.deepEqual(h.json("state.custom"), before, value);
+    assert.deepEqual(h.saved(), before, value);
+  }
+  assert.throws(() => h.run('commitBankBalance("missing", "12.34")'));
+  assert.equal(h.storage.writes, writes);
+});
+
+test("ACC bank: storage failure is atomic and a valid grouped balance can be retried", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  h.run("persistCustomCandidate(state.custom);");
+  const before = h.json("state.custom");
+  const writes = h.storage.writes;
+  h.storage.fail = true;
+  assert.throws(() => h.run('commitBankBalance("bank-a", "2,000.25")'), /guardar|almacenamiento/i);
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.deepEqual(h.saved(), before);
+  assert.equal(h.storage.writes, writes);
+  h.storage.fail = false;
+  assert.equal(h.run('commitBankBalance("bank-a", "2,000.25")'), 2000.25);
+  assert.equal(h.saved().accounts[0].balance, 2000.25);
+  assert.equal(h.storage.writes, writes + 1);
+});
+
+test("ACC bank: formatted edits stay in their scenario and reject a stale origin or demo", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  const base = h.json("state.custom");
+  const id = h.run('createSavedScenario("Saldos contables")');
+  const writes = h.storage.writes;
+  assert.throws(() => h.run('commitBankBalance("bank-a", "1,234.50", "base")'));
+  assert.equal(h.storage.writes, writes);
+  h.run('commitBankBalance("bank-a", "1,234.50", input)', id);
+  assert.equal(h.run("state.custom.accounts[0].balance"), 1234.5);
+  assert.deepEqual(h.json("getBaseProjection()"), base);
+  h.run('state.mode = "demo";');
+  assert.throws(() => h.run('commitBankBalance("bank-a", "2,345.67", input)', id));
+  assert.equal(h.run("state.custom.accounts[0].balance"), 1234.5);
+  assert.equal(h.storage.writes, writes + 1);
+});
+
+test("ACC render: KPIs preserve cents and outflows or negative balances use accounting parentheses without duplicate signs", () => {
+  const h = harness();
+  seed(h, [movement("in", h.day(1), { amount: 10.11 }), payment("out", h.day(2), { amount: 50.25 })],
+    [{ id: "bank-test", name: "Banco cero", balance: 0 }]);
+  h.run("renderCaptureList(); renderDashboard();");
+  assert.equal(h.run("els.availableBalance.textContent"), "$—");
+  assert.equal(h.run("els.periodInflows.textContent"), "$10.11");
+  assert.equal(h.run("els.periodOutflows.textContent"), "$50.25");
+  assert.equal(h.run("els.projectedBalance.textContent"), "($40.14)");
+  assert.equal(h.run("els.minimumBalance.textContent"), "($40.14)");
+  for (const expression of ["els.captureList.innerHTML", "els.movementsTableBody.innerHTML"]) {
+    const rendered = h.run(expression);
+    assert.match(rendered, /\(\$50\.25\)/);
+    assert.doesNotMatch(rendered, /[+−-]\s*\$/);
+  }
+  assert.equal(h.run("state.custom.movements[1].amount"), 50.25);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("ACC input events: focus preserves the draft; blur formats cents without changing Enter capture behavior", () => {
+  const h = harness();
+  seed(h, []);
+  h.run("bindEvents();");
+  const amount = h.elements.get("#movementAmount");
+  amount.tagName = "INPUT";
+  amount.dataset.moneyInput = "amount";
+  amount.dataset.moneyError = "movementAmountError";
+  amount.value = "1,234.50";
+  amount.emit("focus");
+  assert.equal(amount.value, "1,234.50", "focus must not rewrite text while a user selects or pastes");
+  amount.value = "$2,345.67";
+  amount.emit("input");
+  assert.equal(amount.value, "$2,345.67", "typing must not rewrite the field or jump the cursor");
+  amount.emit("blur");
+  assert.equal(amount.value, "2,345.67");
+  assert.equal(accountingModule.parseInput(amount.value), 2345.67);
+  amount.emit("focus");
+  assert.equal(amount.value, "2,345.67");
+  let prevented = false;
+  h.elements.get("#movementForm").emit("keydown", {
+    target: amount, key: "Enter", isComposing: false, preventDefault() { prevented = true; },
+  });
+  assert.equal(prevented, true);
+  assert.equal(amount.value, "2,345.67");
+  amount.value = "1.001";
+  amount.emit("input");
+  amount.emit("blur");
+  assert.equal(amount.value, "1.001", "invalid precision must remain available to correct");
+  assert.notEqual(amount.validationMessage, "");
+  assert.equal(amount.getAttribute("aria-invalid"), "true");
+  assert.deepEqual(h.json("state.custom.movements"), []);
+  assert.equal(h.storage.writes, 0);
+  assert.equal(h.run("els.movementForm.resetCount || 0"), 0);
+});
+
+test("ACC bank events: typing does not save; failed blur retains the draft and a second blur retries atomically", () => {
+  const h = harness();
+  seedTreasury(h, []);
+  h.run("bindEvents();");
+  const editor = h.elements.get("#banksEditor");
+  const row = new Element("DIV");
+  row.dataset.bankId = "bank-a";
+  const balance = new Element("INPUT");
+  balance.parentElement = row;
+  Object.assign(balance.dataset, { field: "balance", moneyInput: "balance", scenarioId: "base", moneyError: "bank-balance-error-test" });
+  balance.value = "1,000.00";
+  editor.emit("focusin", { target: balance });
+  assert.equal(balance.value, "1,000.00", "focusing a bank balance must preserve its text");
+  balance.value = "2,000.25";
+  editor.emit("input", { target: balance });
+  assert.equal(h.run("state.custom.accounts[0].balance"), 1000);
+  assert.equal(h.storage.writes, 0);
+  const before = h.json("state.custom");
+  h.storage.fail = true;
+  editor.emit("focusout", { target: balance });
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 0);
+  assert.equal(accountingModule.parseInput(balance.value), 2000.25);
+  assert.notEqual(balance.validationMessage, "");
+  assert.equal(balance.getAttribute("aria-invalid"), "true");
+  h.storage.fail = false;
+  editor.emit("focusout", { target: balance });
+  assert.equal(h.saved().accounts[0].balance, 2000.25);
+  assert.equal(balance.value, "2,000.25");
+  assert.equal(balance.validationMessage, "");
+  assert.equal(balance.getAttribute("aria-invalid"), null);
+  assert.equal(h.elements.get("#bank-balance-error-test").hidden, true);
+  assert.equal(h.storage.writes, 1);
+  const saved = h.saved();
+  balance.value = "";
+  editor.emit("input", { target: balance });
+  editor.emit("focusout", { target: balance });
+  assert.equal(balance.value, "", "an empty draft must remain available to correct");
+  assert.equal(balance.getAttribute("aria-invalid"), "true");
+  assert.deepEqual(h.saved(), saved);
+  assert.equal(h.run("state.custom.accounts[0].balance"), 2000.25, "an empty input must never turn a bank balance into zero");
+  assert.equal(h.storage.writes, 1);
 });
 

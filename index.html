@@ -165,11 +165,12 @@
                 <button class="button button-secondary" id="addBankButton" type="button">Agregar banco</button>
                 <div class="initial-total-card">
                   <small>Saldo inicial total</small>
-                  <strong id="initialTotal">$0</strong>
+                  <strong id="initialTotal">$—</strong>
                 </div>
               </div>
 
               <div class="banks-editor" id="banksEditor"></div>
+              <p class="movement-bank-help" id="bank-balance-help">MXN · Los saldos se guardan al salir del campo. Ejemplo: 1,234.50.</p>
             </article>
 
             <article class="builder-card">
@@ -221,8 +222,9 @@
                 </div>
 
                 <div class="field-group movement-amount-field">
-                  <label for="movementAmount">Importe</label>
-                  <input id="movementAmount" type="number" min="0.01" step="0.01" placeholder="0.00" required />
+                  <label for="movementAmount">Importe (MXN)</label>
+                  <div class="accounting-input"><span aria-hidden="true">$</span><input id="movementAmount" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" data-money-input="amount" data-money-error="movementAmountError" aria-describedby="movementAmountError" placeholder="0.00" required /></div>
+                  <p class="money-input-error" id="movementAmountError" role="alert" hidden></p>
                 </div>
 
                 <div class="field-group movement-bank-field" id="movementBankField" hidden>
@@ -294,7 +296,7 @@
                 <span>Saldo disponible</span>
                 <span class="kpi-icon" aria-hidden="true">$</span>
               </div>
-              <strong class="kpi-value" id="availableBalance">$0</strong>
+              <strong class="kpi-value" id="availableBalance">$—</strong>
               <small id="accountCountLabel">0 bancos registrados</small>
             </article>
 
@@ -303,7 +305,7 @@
                 <span>Cobros del periodo</span>
                 <span class="kpi-trend kpi-trend-in" aria-hidden="true">↗</span>
               </div>
-              <strong class="kpi-value" id="periodInflows">$0</strong>
+              <strong class="kpi-value" id="periodInflows">$—</strong>
               <small id="inflowCount">0 cobros considerados</small>
             </article>
 
@@ -312,7 +314,7 @@
                 <span>Pagos del periodo</span>
                 <span class="kpi-trend kpi-trend-out" aria-hidden="true">↘</span>
               </div>
-              <strong class="kpi-value" id="periodOutflows">$0</strong>
+              <strong class="kpi-value" id="periodOutflows">$—</strong>
               <small id="outflowCount">0 pagos considerados</small>
             </article>
 
@@ -321,8 +323,8 @@
                 <span>Saldo proyectado</span>
                 <span class="kpi-icon kpi-icon-soft" aria-hidden="true">≈</span>
               </div>
-              <strong class="kpi-value" id="projectedBalance">$0</strong>
-              <small id="projectedDelta">$0 frente al saldo actual</small>
+              <strong class="kpi-value" id="projectedBalance">$—</strong>
+              <small id="projectedDelta">$— frente al saldo actual</small>
             </article>
           </section>
 
@@ -367,7 +369,7 @@
                   <span class="insight-marker insight-marker-blue" aria-hidden="true"></span>
                   <div>
                     <small>Saldo mínimo proyectado</small>
-                    <strong id="minimumBalance">$0</strong>
+                    <strong id="minimumBalance">$—</strong>
                     <p id="minimumBalanceDate">Saldo al inicio del escenario</p>
                   </div>
                 </div>
@@ -386,7 +388,7 @@
                   <div>
                     <small>Movimientos por confirmar</small>
                     <strong id="pendingCount">0 incluidos</strong>
-                    <p id="pendingAmount">Efecto neto de $0</p>
+                    <p id="pendingAmount">Efecto neto de $—</p>
                   </div>
                 </div>
               </div>
@@ -587,8 +589,9 @@
             <input id="editMovementConcept" type="text" maxlength="70" />
           </div>
           <div class="field-group">
-            <label for="editMovementAmount">Importe</label>
-            <input id="editMovementAmount" type="number" min="0.01" step="0.01" />
+            <label for="editMovementAmount">Importe (MXN)</label>
+            <div class="accounting-input"><span aria-hidden="true">$</span><input id="editMovementAmount" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" data-money-input="amount" data-money-error="editMovementAmountError" aria-describedby="editMovementAmountError" /></div>
+            <p class="money-input-error" id="editMovementAmountError" role="alert" hidden></p>
           </div>
         </div>
 
@@ -867,6 +870,7 @@
     <div class="sr-only" id="liveRegion" aria-live="polite"></div>
     <script src="excel-export.js"></script>
     <script src="treasury-import.js"></script>
+    <script src="accounting.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

@@ -11,8 +11,12 @@
   const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
   const PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relationships";
   const HEADERS = ["Fecha", "Concepto", "Tipo", "Estatus", "Importe (MXN)", "Banco", "Categoría", "Banco origen", "Banco destino", "ID"];
-  const WIDTHS = [14, 44, 16, 20, 23, 28, 22, 28, 28, 44];
+  const WIDTHS = [14, 44, 16, 20, 28, 28, 22, 28, 28, 44];
   const TEXT_FIELDS = ["concept", "type", "status", "bank", "category", "fromBank", "toBank", "id"];
+  // Positive; negative; zero; text. Fill spaces align the MXN label separately
+  // from the amount, while padding aligns parentheses and decimal positions.
+  // https://support.microsoft.com/en-us/excel/review-guidelines-for-customizing-a-number-format
+  const ACCOUNTING_MXN_FORMAT = '_("MXN"* #,##0.00_);_("MXN"* (#,##0.00);_("MXN"* "-"??_);_(@_)';
 
   function escapeXML(value) {
     return String(value).replace(/[&<>"']/g, (character) => ({
@@ -94,7 +98,7 @@
 
   function stylesXML() {
     return `${XML}<styleSheet xmlns="${NS}">`
-      + '<numFmts count="2"><numFmt numFmtId="164" formatCode="dd/mm/yyyy"/><numFmt numFmtId="165" formatCode="&quot;MXN&quot; #,##0.00"/></numFmts>'
+      + `<numFmts count="2"><numFmt numFmtId="164" formatCode="dd/mm/yyyy"/><numFmt numFmtId="165" formatCode="${escapeXML(ACCOUNTING_MXN_FORMAT)}"/></numFmts>`
       + '<fonts count="2"><font><sz val="11"/><color rgb="FF14233B"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/><family val="2"/></font></fonts>'
       + '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF2463DB"/><bgColor indexed="64"/></patternFill></fill></fills>'
       + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'

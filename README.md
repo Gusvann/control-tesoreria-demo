@@ -62,9 +62,15 @@ El filtro de un banco incluye sus pagos asignados y los traspasos donde particip
 
 El nombre del campo es **estatus del movimiento**: **Confirmado** o **Por confirmar**. La proyección personal conserva sus cambios en este navegador. En **Ver ejemplo**, la edición es temporal y se restablece al recargar.
 
-### Importes con centavos
+### Importes en formato contable
 
-La captura y la edición admiten importes positivos con hasta dos decimales. El detalle de movimientos, las tablas bancarias, los totales seleccionados, los grupos de pagos y la exportación a Excel muestran centavos. Los indicadores principales y la gráfica mantienen sus formatos resumidos para facilitar la lectura.
+Los importes y saldos usan MXN, separador de miles y dos decimales: `$1,234.50`. Los negativos calculados y las salidas en las filas de movimientos se muestran entre paréntesis, como `($1,234.50)`; el cero monetario aparece como `$—`. Los indicadores principales también conservan centavos. Solo el eje de la gráfica abrevia cifras de millones para mantener legibles sus etiquetas.
+
+En captura, edición, duplicación y saldos bancarios, el símbolo `$` queda a la izquierda y las cifras a la derecha. Puedes escribir el número sin separadores; al salir se aplica el formato, sin reescribir el texto al enfocar o durante cada pulsación. Puedes pegar `1234.5`, `1,234.50`, `$1,234.50` o `MXN 1,234.50`. Una entrada vacía no equivale a cero: texto inválido, separadores incorrectos y milésimas se conservan para corregirlos y no se guardan como otro importe.
+
+Los saldos bancarios se guardan al salir del campo. La captura y la edición de movimientos se guardan únicamente con sus respectivos botones. Mostrar el formato no cambia los números almacenados; los pagos siguen siendo importes positivos identificados por su tipo. Una edición de otro campo tampoco redondea importes anteriores intactos.
+
+El Excel exportado utiliza el formato Contabilidad de cuatro secciones y mantiene los importes como celdas numéricas. Fechas, porcentajes, conteos y números de fila conservan su formato habitual.
 
 ### Enter durante la captura
 
@@ -161,9 +167,11 @@ node --check app.js
 node --check excel-export.js
 node --check treasury-import.js
 node --check treasury-import-worker.js
+node --check accounting.js
 node tests/movements.test.cjs
 node tests/excel-export.test.cjs
 node tests/treasury-import.test.cjs
+node tests/accounting.test.cjs
 ```
 
 No se necesitan dependencias para las pruebas. Consulta [la especificación](docs/movement-editing-spec.md) y [la evidencia de verificación](docs/movement-editing-verification.md) para conocer el alcance y los límites de las comprobaciones.
@@ -173,6 +181,8 @@ La ampliación de banco opcional tiene su [especificación](docs/optional-paymen
 La ampliación de horizontes, categorías, traspasos, exportación y operación diaria se describe en [su especificación](docs/treasury-expansion-spec.md). Los resultados y límites de las comprobaciones se registran en [la evidencia de esta ampliación](docs/treasury-expansion-verification.md).
 
 La importación, duplicación y simulación guardada tienen [especificación](docs/import-duplicate-scenarios-spec.md) y [evidencia de verificación](docs/import-duplicate-scenarios-verification.md).
+
+El formato contable tiene [especificación](docs/accounting-format-spec.md) y [evidencia de verificación](docs/accounting-format-verification.md).
 
 ## Diseño
 
@@ -210,6 +220,7 @@ También puede publicarse mediante GitHub Pages.
 ├── excel-export.js
 ├── treasury-import.js
 ├── treasury-import-worker.js
+├── accounting.js
 ├── vendor/
 ├── README.md
 ├── docs/

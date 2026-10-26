@@ -768,7 +768,8 @@ a:focus-visible {
 .kpi-value {
   display: block;
   margin: 18px 0 6px;
-  font-size: clamp(1.4rem, 2.2vw, 2rem);
+  font-size: clamp(1.2rem, 1.85vw, 1.65rem);
+  font-variant-numeric: tabular-nums;
   line-height: 1.1;
   letter-spacing: -0.035em;
 }
@@ -2994,3 +2995,45 @@ body {
 }
 
 
+
+/* Money inputs keep the currency separate from editable digits. */
+.accounting-input {
+  position: relative;
+  min-width: 0;
+}
+
+.accounting-input > span {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  z-index: 1;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.accounting-input > input {
+  padding-left: 34px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.accounting-input > input[aria-invalid="true"] {
+  border-color: var(--coral);
+}
+
+.money-input-error {
+  margin: 6px 0 0;
+  color: var(--coral);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.capture-amount,
+.initial-total-card strong,
+.scenario-comparison-table strong,
+.scenario-delta,
+.import-review-table .align-right {
+  font-variant-numeric: tabular-nums;
+}

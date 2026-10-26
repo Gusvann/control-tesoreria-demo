@@ -3,6 +3,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { buildWorkbook } = require("../excel-export.js");
+const XLSX = require("../vendor/xlsx-0.20.3.mini.min.js");
+const TreasuryImport = require("../treasury-import.js");
 
 const record = (extra = {}) => ({
   date: "2026-10-25", concept: "Pago de prueba", type: "Pago", status: "Confirmado",
@@ -61,13 +63,61 @@ test("Excel: creates an actual OOXML package with consistent ZIP CRCs and relati
   assert.match(files.get("xl/workbook.xml"), /sheet name="Movimientos" sheetId="1" r:id="rId1"/);
 });
 
-test("Excel: preserves cents as numeric data and supplies a two-decimal MXN format", () => {
+test("Excel: preserves cents as numeric data and supplies a two-decimal accounting MXN format", () => {
   const files = readZip(buildWorkbook([record({ amount: 0.01 }), record({ amount: 999999.99 }), record({ amount: 100.49 })]));
   const sheet = files.get("xl/worksheets/sheet1.xml");
   assert.match(sheet, /<c r="E2" s="3" t="n"><v>0\.01<\/v><\/c>/);
   assert.match(sheet, /<c r="E3" s="3" t="n"><v>999999\.99<\/v><\/c>/);
   assert.match(sheet, /<c r="E4" s="3" t="n"><v>100\.49<\/v><\/c>/);
-  assert.match(files.get("xl/styles.xml"), /formatCode="&quot;MXN&quot; #,##0\.00"/);
+  assert.match(files.get("xl/styles.xml"), /formatCode="_\(&quot;MXN&quot;\* #,##0\.00_\);_\(&quot;MXN&quot;\* \(#,##0\.00\);_\(&quot;MXN&quot;\* &quot;-&quot;\?\?_\);_\(@_\)"/);
+});
+
+test("Excel: independent reader applies accounting display without changing numeric amounts", () => {
+  const amounts = [0, 0.01, 1234.5, 268435456.03, 536870912.05, 10000000000.03];
+  const workbook = XLSX.read(buildWorkbook(amounts.map(amount => record({ amount }))), {
+    type: "array", cellNF: true, cellText: true,
+  });
+  const sheet = workbook.Sheets.Movimientos;
+  const cells = amounts.map((_, index) => sheet[`E${index + 2}`]);
+  assert.deepEqual(cells.map(cell => cell.t), amounts.map(() => "n"));
+  assert.deepEqual(cells.map(cell => cell.v), amounts, "formatting must not round or stringify stored values");
+  const compact = text => text.replace(/\s/g, "");
+  assert.deepEqual(cells.map(cell => compact(cell.w)), [
+    "MXN-", "MXN0.01", "MXN1,234.50", "MXN268,435,456.03", "MXN536,870,912.05", "MXN10,000,000,000.03",
+  ]);
+  const format = cells[0].z;
+  assert.equal(format.split(";").length, 4);
+  assert.ok(format.includes("* "), "the accounting currency label has fill spacing");
+  // Movement magnitudes remain nonnegative; exercise the cell style's negative
+  // and text sections independently for later calculations or edits in Excel.
+  assert.equal(compact(XLSX.SSF.format(format, -1234.56)), "MXN(1,234.56)");
+  assert.equal(compact(XLSX.SSF.format(format, -0.01)), "MXN(0.01)");
+  assert.equal(XLSX.SSF.format(format, "Referencia").trim(), "Referencia");
+});
+
+test("Excel: accounting-formatted exports import back with the same cents and movement signs", async () => {
+  const rows = [
+    record({ id: "payment", type: "Pago", amount: 1234.56 }),
+    record({ id: "receipt", type: "Cobro", amount: 0.01, bank: "", category: "" }),
+    record({ id: "transfer", type: "Traspaso", amount: 268435456.03, bank: "", category: "", fromBank: "Banco A", toBank: "Banco B" }),
+  ];
+  const imported = await TreasuryImport.readXlsx(buildWorkbook(rows));
+  const sheet = imported.sheets[0];
+  const report = TreasuryImport.preview(sheet, {
+    headerRow: 1, mapping: TreasuryImport.suggestMapping(sheet, { headerRow: 1 }),
+    dateOrder: "DMY", numberFormat: "es-MX",
+  }, {
+    accounts: [{ id: "bank-a", name: "Banco A" }, { id: "bank-b", name: "Banco B" }],
+    categories: [{ id: "gastos", label: "Gastos" }],
+    existingMovements: [], todayISO: "2026-10-25", minDate: "2026-10-25",
+  });
+  assert.equal(report.summary.valid, 3);
+  assert.equal(report.summary.invalid, 0);
+  assert.deepEqual(report.rows.map(row => row.movement.amount), rows.map(row => row.amount));
+  assert.deepEqual(report.rows.map(row => row.movement.type), ["outflow", "inflow", "transfer"]);
+  assert.equal(report.rows[0].movement.bankId, "bank-a");
+  assert.equal(report.rows[2].movement.fromBankId, "bank-a");
+  assert.equal(report.rows[2].movement.toBankId, "bank-b");
 });
 
 test("Excel: serializes dates as numeric Excel dates without time-zone drift", () => {
