@@ -2216,7 +2216,7 @@ test("REGRESSION cash shortfall: exact cents settle to zero without a false nega
     payment("first", h.day(1), { amount: 6250.01 }),
     payment("second", h.day(2), { amount: 18749.99 }),
   ]);
-  h.run('state.custom.accounts[0].balance = 25000; state.horizon = 7;');
+  h.run('state.custom.accounts = state.custom.accounts.map((account, i) => ({ ...account, balance: i === 0 ? 25000 : 0 })); state.horizon = 7;');
   const series = h.json("getForecastSeries(getFilteredMovements(), getAvailableBalance())");
   assert.equal(series.at(-1).balance, 0);
   assert.ok(series.every(point => point.balance >= 0));
@@ -2240,12 +2240,13 @@ test("REGRESSION bank blur: recalculates KPIs but keeps movement action nodes in
   editor.emit("focusout", { target: input });
   assert.equal(h.saved().accounts[0].balance, 2000);
   assert.equal(h.elements.get("#movementsTableBody").innerHTML, actionBefore);
-  assert.equal(h.run("els.availableBalance.textContent"), "$2,000.00");
+  assert.equal(h.run("els.availableBalance.textContent"), "$2,750.00");
 });
 
 test("STABILITY: a stale tab refuses to overwrite changes stored by another tab", () => {
   const h = harness();
   seedTreasury(h, [payment("one", h.day(1))]);
+  h.run("persistCustomCandidate(state.custom)");
   const saved = h.saved();
   h.storage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, externalMarker: "other-tab" }));
   assert.throws(() => h.run('commitMovementEdit(["one"], { status: "pending" }, "custom")'), /Otra pestaña/);
@@ -2261,4 +2262,25 @@ test("STABILITY: multiple undo operations restore the original sibling order", (
   h.run('undoDeleteMovement(input)', a);
   h.run('undoDeleteMovement(input)', b);
   assert.deepEqual(h.json('state.custom.movements.map(m => m.id)'), ["a", "b", "c"]);
+});
+
+test("STABILITY: historical subcent balances do not create a cent from two displayed zeros", () => {
+  const h = harness({
+    accounts: [
+      { id: "a", name: "A", balance: 0.0049 },
+      { id: "b", name: "B", balance: 0.0049 },
+    ],
+    movements: [],
+  });
+  assert.equal(h.run("getAvailableBalance(state.custom.accounts)"), 0);
+  assert.equal(h.run("getScenarioMetrics(state.custom).finalBalance"), 0);
+});
+
+test("STABILITY: export rows retain bank IDs, while an unassigned payment exports an empty bank name", () => {
+  const h = harness();
+  seedTreasury(h, [payment("assigned", h.day(1), { bankId: "bank-a" }), payment("unassigned", h.day(2))]);
+  const rows = h.json('getExportRows("all")');
+  assert.equal(rows[0].bankId, "bank-a");
+  assert.equal(rows[1].bankId, "");
+  assert.equal(rows[1].bank, "");
 });
