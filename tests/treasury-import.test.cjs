@@ -223,7 +223,7 @@ test("Import text: malformed quoting and excessive rows/columns are rejected wit
 
 test("Import mapping: aliases, repeated headings and headerless tables have explicit contracts", () => {
   const sheet = cells([["Fecha de pago", "Descripción", "Monto (MXN)", "Banco origen", "Banco destino", "Categoría", "ID"]]);
-  assert.deepEqual(importer.suggestMapping(sheet), { date: 0, concept: 1, type: null, status: null, amount: 2, bank: null, category: 5, fromBank: 3, toBank: 4, sourceId: 6 });
+  assert.deepEqual(importer.suggestMapping(sheet), { date: 0, concept: 1, type: null, status: null, amount: 2, bank: null, category: 5, fromBank: 3, toBank: 4, sourceId: 6, bankId: null, fromBankId: null, toBankId: null });
   assert.equal(importer.suggestMapping(cells([["Fecha", "Concepto", "Importe", "Importe"]])).amount, null);
   const noHeader = cells([[today, "Sin encabezados", "125.50"]]);
   const result = preview(noHeader, { headerRow: 0, mapping: { date: 0, concept: 1, amount: 2 }, defaults: { type: "inflow", status: "pending" } });
@@ -444,4 +444,32 @@ test("STABILITY: numeric Excel residues smaller than one cent fail preview", () 
   const report = preview(simpleSheet([[today, "Residuo de fórmula", 0.000000000001]]));
   assert.equal(report.summary.valid, 0);
   assert.ok(report.rows[0].errors.length > 0);
+});
+
+test("Import roundtrip: explicit bank IDs disambiguate identical names and empty bank labels", () => {
+  const duplicateNames = [{ id: "bank-a", name: "Banco A" }, { id: "bank-alt", name: "Banco A" }];
+  const sheet = cells([
+    ["Fecha", "Concepto", "Importe", "Tipo", "Banco", "ID banco"],
+    [today, "Asignado", 19.25, "Pago", "Banco A", "bank-alt"],
+    [today, "Sin asignación", 21.50, "Pago", "Sin banco asignado", ""],
+    [today, "ID desconocido", 5, "Pago", "Banco A", "not-a-bank"],
+  ]);
+  const report = preview(sheet, {}, { accounts: duplicateNames });
+  assert.equal(report.summary.valid, 2);
+  assert.equal(report.summary.invalid, 1);
+  assert.equal(report.rows[0].movement.bankId, "bank-alt");
+  assert.equal(report.rows[1].movement.bankId, undefined);
+  assert.equal(report.rows[2].errors[0].code, "UNKNOWN_BANK_ID");
+});
+
+test("Import roundtrip: transfer IDs resolve against duplicate bank display names", () => {
+  const accounts = [{ id: "bank-a", name: "Banco A" }, { id: "bank-b", name: "Banco A" }];
+  const sheet = cells([
+    ["Fecha", "Concepto", "Importe", "Tipo", "Banco origen", "Banco destino", "ID banco origen", "ID banco destino"],
+    [today, "Traspaso real", 100, "Traspaso", "Banco A", "Banco A", "bank-a", "bank-b"],
+  ]);
+  const report = preview(sheet, {}, { accounts });
+  assert.equal(report.summary.valid, 1);
+  assert.equal(report.rows[0].movement.fromBankId, "bank-a");
+  assert.equal(report.rows[0].movement.toBankId, "bank-b");
 });
