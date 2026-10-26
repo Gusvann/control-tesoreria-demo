@@ -421,6 +421,8 @@
       } else if (!quoted) candidates.forEach((delimiter, candidate) => { if (character === delimiter) line[candidate] += 1; });
     }
     if (line.some(Boolean) || row === 0) candidates.forEach((_, candidate) => counts[candidate].push(line[candidate]));
+    // Clipboard tables use tabs even when cells contain unquoted commas.
+    if (counts[0].some((value) => value > 0)) return "\t";
     let best = 0;
     let score = -1;
     counts.forEach((values, candidate) => {
@@ -514,8 +516,10 @@
       if (!Number.isFinite(value) || value <= 0 || value >= 1e13) return null;
       const cents = Math.round(value * 100);
       const rounded = cents / 100;
+      // Reject positive residues that would become zero and diverge at save time.
+      if (cents <= 0 || !Number.isSafeInteger(cents)) return null;
       const tolerance = Math.min(1e-8, Number.EPSILON * Math.max(1, Math.abs(value)) * 2);
-      return Number.isSafeInteger(cents) && Math.abs(value - rounded) <= tolerance ? rounded : null;
+      return Math.abs(value - rounded) <= tolerance ? rounded : null;
     }
     if (typeof value !== "string") return null;
     let text = value.trim().replace(/\u00a0/g, " ");
@@ -550,9 +554,9 @@
     }
     const text = String(value).trim();
     const label = normalize(text);
-    if (optional && (field === "category" ? label === "sin categoria" : ["sin banco", "sin banco asignado"].includes(label))) return "";
     const idMatches = items.filter((item) => item.id === text);
     const matches = idMatches.length ? idMatches : items.filter((item) => normalize(item.name ?? item.label) === label);
+    if (matches.length === 0 && optional && (field === "category" ? label === "sin categoria" : ["sin banco", "sin banco asignado"].includes(label))) return "";
     if (matches.length === 1) return matches[0].id;
     if (optional && field === "bank" && label === "banco no disponible" && matches.length === 0) {
       warnings.push(issue("BANK_UNAVAILABLE", field, "El banco del archivo ya no está disponible. El pago se importará sin banco asignado."));
