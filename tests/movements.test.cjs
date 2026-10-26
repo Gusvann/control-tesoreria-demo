@@ -2336,7 +2336,7 @@ test("STABILITY: overlapping three deletions restore original order in a scrambl
 
 test("STABILITY: legacy subcent payments reconcile forecast, totals and categories consistently", () => {
   const h = harness();
-  seedTreasury(h, [
+  seed(h, [
     payment("tiny-1", h.day(1), { amount: 0.0049 }),
     payment("tiny-2", h.day(1), { amount: 0.0049 }),
   ], [{ id: "bank-a", name: "Banco A", balance: 100 }]);
