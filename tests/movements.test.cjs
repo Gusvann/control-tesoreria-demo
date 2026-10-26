@@ -2242,3 +2242,23 @@ test("REGRESSION bank blur: recalculates KPIs but keeps movement action nodes in
   assert.equal(h.elements.get("#movementsTableBody").innerHTML, actionBefore);
   assert.equal(h.run("els.availableBalance.textContent"), "$2,000.00");
 });
+
+test("STABILITY: a stale tab refuses to overwrite changes stored by another tab", () => {
+  const h = harness();
+  seedTreasury(h, [payment("one", h.day(1))]);
+  const saved = h.saved();
+  h.storage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, externalMarker: "other-tab" }));
+  assert.throws(() => h.run('commitMovementEdit(["one"], { status: "pending" }, "custom")'), /Otra pestaña/);
+  assert.equal(h.saved().externalMarker, "other-tab");
+  assert.equal(h.run('state.custom.movements[0].status'), "confirmed");
+});
+
+test("STABILITY: multiple undo operations restore the original sibling order", () => {
+  const h = harness();
+  seedTreasury(h, [payment("a", h.day(1)), payment("b", h.day(1)), payment("c", h.day(1))]);
+  const a = h.run('deleteMovement("a")');
+  const b = h.run('deleteMovement("b")');
+  h.run('undoDeleteMovement(input)', a);
+  h.run('undoDeleteMovement(input)', b);
+  assert.deepEqual(h.json('state.custom.movements.map(m => m.id)'), ["a", "b", "c"]);
+});
