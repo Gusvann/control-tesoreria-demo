@@ -32,8 +32,8 @@ const demoMovements = [
   { id: "d13", offsetDays: 28, concept: "Impuestos provisionales", type: "outflow", amount: 340000, status: "confirmed" },
 ];
 
-const today = startOfDay(new Date());
-const todayISO = toISODate(today);
+let today = startOfDay(new Date());
+let todayISO = toISODate(today);
 
 const state = {
   mode: "demo",
@@ -60,7 +60,13 @@ loadSavedScenarios();
 
 // Snapshot of the latest state read or written by this tab. Never overwrite
 // changes from another tab silently.
-let lastPersistedSnapshot = localStorage.getItem(STORAGE_KEY);
+let lastPersistedSnapshot = null;
+try {
+  lastPersistedSnapshot = localStorage.getItem(STORAGE_KEY);
+} catch (error) {
+  state.scenarioStorageBlocked = true;
+  state.scenarioLoadError = "Este navegador bloqueó el almacenamiento. Puedes consultar el ejemplo, pero no guardar cambios personales hasta habilitarlo.";
+}
 
 
 const els = {
@@ -805,7 +811,10 @@ function getActiveMovements() {
 }
 
 function getAvailableBalance(accounts = getActiveAccounts()) {
-  return accounts.reduce((sum, account) => sum + toSafeNumber(account.balance), 0);
+  // Each account has a payable balance in cents. Rounding each legacy entry
+  // separately prevents two visually-zero fractions combining into one cent.
+  const totalCents = accounts.reduce((sum, account) => sum + Math.round(toSafeNumber(account.balance) * 100), 0);
+  return totalCents / 100;
 }
 
 function isMovementIncluded(movement) {
@@ -2081,9 +2090,9 @@ function deleteMovement(id) {
   if (matches.length !== 1) throw new Error("No se puede identificar este movimiento de forma única.");
   const index = state.custom.movements.findIndex((movement) => movement.id === id);
   const movement = { ...matches[0] };
-  persistCustomCandidate({ ...state.custom, movements: state.custom.movements.filter((entry) => entry.id !== id) });
-  const token = createId("undo");
   const originalRows = state.custom.movements;
+  const token = createId("undo");
+  persistCustomCandidate({ ...state.custom, movements: originalRows.filter((entry) => entry.id !== id) });
   const entry = { movement, index, beforeId: originalRows[index - 1]?.id ?? null,
     afterId: originalRows[index + 1]?.id ?? null,
     scenarioId: state.activeScenarioId, expiresAt: Date.now() + 5000 };
@@ -2153,10 +2162,13 @@ function getExportRows(scope = "visible") {
     id: movement.id, date: movement.date, concept: movement.concept,
     type: getMovementTypeLabel(movement), status: movement.status === "pending" ? "Por confirmar" : "Confirmado",
     amount: movement.amount,
-    bank: movement.type === "outflow" ? getMovementBankLabel(movement) : "",
+    bank: movement.type === "outflow" && getMovementBankId(movement) ? getMovementBankLabel(movement) : "",
     category: movement.type === "outflow" ? getMovementCategoryLabel(movement) : "",
     fromBank: movement.type === "transfer" ? getBankLabel(movement.fromBankId) : "",
     toBank: movement.type === "transfer" ? getBankLabel(movement.toBankId) : "",
+    bankId: movement.type === "outflow" ? getMovementBankId(movement) : "",
+    fromBankId: movement.type === "transfer" ? movement.fromBankId : "",
+    toBankId: movement.type === "transfer" ? movement.toBankId : "",
   }));
 }
 
@@ -3007,6 +3019,42 @@ window.addEventListener?.("storage", (event) => {
   if (els.scenarioFeedback) els.scenarioFeedback.textContent = "Hay cambios externos. Recarga antes de guardar.";
 });
 
+// The app may stay open overnight or resume after a suspended browser tab.
+let midnightRefreshTimer = null;
+function refreshTodayIfNeeded() {
+  const nextToday = startOfDay(new Date());
+  const nextISO = toISODate(nextToday);
+  if (nextISO === todayISO) return false;
+  const previousISO = todayISO;
+  today = nextToday;
+  todayISO = nextISO;
+  els.projectionStart.value = nextISO;
+  els.lastUpdate.textContent = `Fecha inicial: ${longDate.format(today)}`;
+  els.movementDate.min = nextISO;
+  if (!els.movementConcept.value.trim() && !els.movementAmount.value && els.movementDate.value === previousISO) {
+    els.movementDate.value = nextISO;
+  }
+  state.selectedMovementIds.clear();
+  renderDashboard();
+  return true;
+}
+
+function scheduleMidnightRefresh() {
+  if (midnightRefreshTimer !== null) clearTimeout(midnightRefreshTimer);
+  const now = new Date();
+  const tomorrow = startOfDay(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  midnightRefreshTimer = setTimeout(() => {
+    refreshTodayIfNeeded();
+    scheduleMidnightRefresh();
+  }, Math.max(100, tomorrow.getTime() - now.getTime() + 100));
+}
+
+window.addEventListener?.("focus", refreshTodayIfNeeded);
+document.addEventListener?.("visibilitychange", () => {
+  if (document.visibilityState === "visible") refreshTodayIfNeeded();
+});
+
 function initialize() {
   els.projectionStart.value = todayISO;
   els.movementDate.value = todayISO;
@@ -3017,6 +3065,7 @@ function initialize() {
 
   bindEvents();
   setMode("demo");
+  scheduleMidnightRefresh();
 }
 
 initialize();
