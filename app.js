@@ -2200,8 +2200,16 @@ function resetCustomProjection() {
     return;
   }
   try {
+    if (localStorage.getItem(STORAGE_KEY) !== lastPersistedSnapshot) {
+      throw new Error("Otra pestaña modificó la proyección. Recarga antes de restablecerla.");
+    }
     localStorage.removeItem(STORAGE_KEY);
+    lastPersistedSnapshot = null;
   } catch (error) {
+    if (error.message?.includes("Otra pestaña")) {
+      els.captureFeedback.textContent = error.message;
+      return;
+    }
     els.captureFeedback.textContent = "No se pudo restablecer la proyección en este navegador. Tus datos no se modificaron. Revisa los permisos de almacenamiento e intenta de nuevo.";
     return;
   }
