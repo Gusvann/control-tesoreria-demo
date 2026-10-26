@@ -2209,3 +2209,36 @@ test("ACC bank events: typing does not save; failed blur retains the draft and a
   assert.equal(h.storage.writes, 1);
 });
 
+
+test("REGRESSION cash shortfall: exact cents settle to zero without a false negative day", () => {
+  const h = harness();
+  seedTreasury(h, [
+    payment("first", h.day(1), { amount: 6250.01 }),
+    payment("second", h.day(2), { amount: 18749.99 }),
+  ]);
+  h.run('state.custom.accounts[0].balance = 25000; state.horizon = 7;');
+  const series = h.json("getForecastSeries(getFilteredMovements(), getAvailableBalance())");
+  assert.equal(series.at(-1).balance, 0);
+  assert.ok(series.every(point => point.balance >= 0));
+  assert.equal(h.run("getScenarioMetrics(state.custom).firstShortfallDate"), null);
+});
+
+test("REGRESSION bank blur: recalculates KPIs but keeps movement action nodes intact", () => {
+  const h = harness();
+  seedTreasury(h, [payment("editable", h.day(1), { amount: 50 })]);
+  h.run("bindEvents();");
+  const editor = h.elements.get("#banksEditor");
+  const row = new Element("DIV");
+  row.dataset.bankId = "bank-a";
+  const input = new Element("INPUT");
+  input.parentElement = row;
+  Object.assign(input.dataset, { field: "balance", moneyInput: "balance", scenarioId: "base", moneyError: "bank-balance-error-regression" });
+  input.value = "1,000.00";
+  editor.emit("focusin", { target: input });
+  input.value = "2,000.00";
+  const actionBefore = h.elements.get("#movementsTableBody").innerHTML;
+  editor.emit("focusout", { target: input });
+  assert.equal(h.saved().accounts[0].balance, 2000);
+  assert.equal(h.elements.get("#movementsTableBody").innerHTML, actionBefore);
+  assert.equal(h.run("els.availableBalance.textContent"), "$2,000.00");
+});
