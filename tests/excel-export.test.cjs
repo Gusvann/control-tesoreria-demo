@@ -149,8 +149,8 @@ test("Excel: includes optional bank/category and both transfer endpoints without
 
 test("Excel: empty exports remain valid header-only workbooks with freeze panes and filters", () => {
   const sheet = readZip(buildWorkbook([])).get("xl/worksheets/sheet1.xml");
-  assert.match(sheet, /dimension ref="A1:J1"/);
-  assert.match(sheet, /autoFilter ref="A1:J1"/);
+  assert.match(sheet, /dimension ref="A1:M1"/);
+  assert.match(sheet, /autoFilter ref="A1:M1"/);
   assert.match(sheet, /ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/);
   assert.match(sheet, />Importe \(MXN\)<\/t>/);
   assert.match(sheet, />Categoría<\/t>/);
@@ -182,4 +182,13 @@ test("Excel: never mutates source rows and exports deterministically", () => {
 test("Excel: literal OOXML escape sequences are protected against Excel decoding", () => {
   const sheet = readZip(buildWorkbook([record({ concept: "Código _x0041_ y _x005F_" })])).get("xl/worksheets/sheet1.xml");
   assert.match(sheet, /Código _x005F_x0041_ y _x005F_x005F_/);
+});
+
+test("Excel: preserves explicit bank identities separately from their display names", () => {
+  const row = record({ bank: "Banco A", bankId: "bank-a", fromBankId: "bank-a", toBankId: "bank-b" });
+  const sheet = readZip(buildWorkbook([row])).get("xl/worksheets/sheet1.xml");
+  assert.match(sheet, /<c r="K2"[^>]*><is><t[^>]*>bank-a<\/t>/);
+  assert.match(sheet, /<c r="L2"[^>]*><is><t[^>]*>bank-a<\/t>/);
+  assert.match(sheet, /<c r="M2"[^>]*><is><t[^>]*>bank-b<\/t>/);
+  assert.match(sheet, /dimension ref="A1:M2"/);
 });
