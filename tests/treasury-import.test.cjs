@@ -422,3 +422,26 @@ test("Import Worker: the real worker script reads the independent compressed fix
   assert.equal(response.document.sheets[0].rows[1][1].dateISO, today);
   assert.equal(response.document.sheets[0].rows[1][2].value, 45000.5);
 });
+
+test("STABILITY: pasted TSV wins over commas within a concept and grouped amounts", () => {
+  const text = '2026-10-27\tPago, ref, proveedor\t1,234.50\n2026-10-28\tOtro\t5.00';
+  const parsed = importer.parseText(text);
+  assert.equal(parsed.sheets[0].rows[0].length, 3);
+  assert.equal(parsed.sheets[0].rows[0][1].value, "Pago, ref, proveedor");
+});
+
+test("STABILITY: real bank names matching empty-placeholders stay assigned", () => {
+  const customAccounts = [...accounts, { id: "bank-special", name: "Sin banco asignado" }];
+  const report = preview(cells([
+    ["Fecha","Concepto","Importe","Banco"],
+    [today, "Pago especial", 15, "Sin banco asignado"],
+  ]), {}, { accounts: customAccounts });
+  assert.equal(report.summary.valid, 1);
+  assert.equal(report.rows[0].movement.bankId, "bank-special");
+});
+
+test("STABILITY: numeric Excel residues smaller than one cent fail preview", () => {
+  const report = preview(simpleSheet([[today, "Residuo de fórmula", 0.000000000001]]));
+  assert.equal(report.summary.valid, 0);
+  assert.ok(report.rows[0].errors.length > 0);
+});
