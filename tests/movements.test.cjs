@@ -2333,3 +2333,15 @@ test("STABILITY: overlapping three deletions restore original order in a scrambl
   for (const id of ["c", "b", "a"]) h.run("undoDeleteMovement(input)", tokens[id]);
   assert.deepEqual(h.json("state.custom.movements.map(m => m.id)"), ["a","b","c","d","e"]);
 });
+
+test("STABILITY: legacy subcent payments reconcile forecast, totals and categories consistently", () => {
+  const h = harness();
+  seedTreasury(h, [
+    payment("tiny-1", h.day(1), { amount: 0.0049 }),
+    payment("tiny-2", h.day(1), { amount: 0.0049 }),
+  ], [{ id: "bank-a", name: "Banco A", balance: 100 }]);
+  assert.equal(h.run("getPeriodTotals(getFilteredMovements()).outflows"), 0);
+  assert.equal(h.run("getSelectionTotals(state.custom.movements).outflows"), 0);
+  assert.equal(h.run("getPaymentGroups(state.custom.movements).at(-1).total"), 0);
+  assert.equal(h.run("getForecastSeries(getFilteredMovements(), getAvailableBalance()).at(-1).balance"), 100);
+});
