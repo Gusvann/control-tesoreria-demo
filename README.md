@@ -33,12 +33,15 @@ El CTA **Crear mi proyección** cambia a un escenario personal que comienza en c
 - incluir o excluir movimientos por confirmar;
 - revisar el forecast desde la fecha actual;
 - exportar los movimientos a Excel;
-- borrar la proyección y comenzar de nuevo.
+- importar Excel o pegar una tabla con revisión previa;
+- duplicar un movimiento como borrador editable;
+- guardar y comparar escenarios independientes;
+- vaciar el escenario activo y comenzar de nuevo.
 
 ## Criterios del proyecto
 
 - La fecha inicial siempre corresponde al día en que se abre la aplicación.
-- Los movimientos no pueden registrarse con fecha anterior al día actual.
+- La captura y la duplicación no admiten fechas anteriores al día actual. La importación permite históricos únicamente al activar esa opción; no entran en la proyección que comienza hoy.
 - El saldo inicial total se calcula a partir de la suma de los saldos bancarios.
 - La proyección es completamente client-side.
 - No requiere usuarios, contraseñas ni instalación.
@@ -107,11 +110,43 @@ La descarga genera un archivo `.xlsx` con una fila por movimiento y campos de fe
 
 Excel es un reporte de movimientos. El respaldo y la restauración de toda la proyección no forman parte de esta función.
 
+### Importar Excel o pegar una tabla
+
+En la proyección personal, usa **Importar movimientos**. La carga tiene tres pasos y añade registros al escenario activo:
+
+1. **Origen:** selecciona un archivo `.xlsx`, `.csv` o `.tsv`, o pega las celdas copiadas de Excel. Los archivos de texto deben estar en UTF-8.
+2. **Columnas:** elige la hoja, la fila de encabezados (0 si no hay), relaciona las columnas y revisa el orden de fechas y el formato del importe. Fecha, concepto e importe son obligatorios. Tipo y estatus admiten los valores predeterminados visibles. Banco y categoría son opcionales para pagos; los traspasos necesitan dos cuentas existentes y distintas.
+3. **Revisión:** consulta los errores, avisos y posibles duplicados. Las filas válidas sin coincidencias se seleccionan inicialmente. Los posibles duplicados comienzan desmarcados y puedes seleccionarlos explícitamente. Solo **Importar N movimientos seleccionados** guarda el lote.
+
+Los nombres de bancos y categorías deben coincidir con los existentes. No se crean cuentas automáticamente. Los importes deben ser positivos, menores a 10^13 y tener hasta dos decimales. Los IDs de origen ayudan a detectar coincidencias; cada registro importado recibe un ID nuevo. La importación no actualiza ni reemplaza movimientos existentes.
+
+La opción **Permitir fechas anteriores a hoy** incorpora registros históricos que puedes consultar con **Todos los movimientos**, sin modificar la proyección desde hoy. Corrige las filas con errores en el archivo o tabla de origen y vuelve a cargarlas. Un error de validación o almacenamiento conserva la revisión y no guarda una parte del lote.
+
+Límites: 10 MiB por archivo, 5,000 filas de datos de la hoja elegida y 50 columnas; el lector también limita la expansión del archivo, la cantidad de hojas/celdas y el tiempo de lectura. Excel se lee localmente en un Worker con una copia fija de SheetJS CE. Las fórmulas solo aportan su valor guardado, con un aviso; no se recalculan ni se siguen enlaces. No se admiten `.xls`, libros con macros ni libros cifrados.
+
+### Duplicar un movimiento
+
+Usa **Duplicar** en la lista de captura o en la tabla. Se abre el editor con una copia de los datos, sin guardar nada todavía. Cambia concepto, importe, fecha, estatus y los campos aplicables al tipo de movimiento; pulsa **Agregar copia** para crear otro registro con ID nuevo. El original permanece intacto. **Cancelar** y Escape descartan la copia.
+
+La fecha original se mantiene en el borrador. Si ya pasó, elige una fecha desde hoy para poder guardar la copia. Un traspaso se duplica como un solo movimiento con origen y destino. La función está disponible en Base personal y sus simulaciones, no en la vista de ejemplo.
+
+### Escenarios de simulación guardados
+
+**Base personal** es la proyección principal. En **Escenarios guardados** puedes crear hasta 10 simulaciones con nombres únicos. Elige si partes de Base o del escenario actual; cada simulación recibe su propia copia de bancos, saldos y movimientos. En **Más opciones** puedes duplicarla, renombrarla, eliminarla o volver a Base.
+
+La captura, importación, edición, duplicación, eliminación y gestión de bancos afectan únicamente al escenario activo. Al cambiar se reinician filtros, selección y borradores de edición/importación; una captura pendiente solicita confirmar su descarte. El último escenario personal activo se recuerda al recargar, aunque la página conserva su apertura en **Ver ejemplo**.
+
+**Comparar escenarios** muestra saldo inicial, saldo mínimo y fecha, saldo final y primer faltante. Las diferencias se calculan contra Base con el mismo día inicial, horizonte y opción de movimientos por confirmar. Los filtros de la tabla no alteran esta comparación.
+
+**Usar este escenario como Base** muestra primero el impacto. Al confirmar, reemplaza bancos y movimientos de Base por la simulación y guarda automáticamente la Base anterior como otro escenario, en una sola escritura. Necesita un lugar libre entre las 10 simulaciones. Si falla el guardado, no se realiza ningún cambio. **Vaciar escenario** afecta únicamente al activo y conserva los demás.
+
+Base y simulaciones se guardan en este navegador. La copia automática de Base no constituye un respaldo externo ni sincroniza datos entre dispositivos. Los datos existentes siguen siendo Base personal y conservan sus IDs y relaciones.
+
 ### Deshacer una eliminación
 
 Al eliminar un movimiento de la proyección personal, aparece **Deshacer** durante **5 segundos**. Cada eliminación tiene su propio plazo. Deshacer recupera el mismo movimiento sin revertir otras ediciones realizadas después.
 
-Esta recuperación es temporal en la sesión del navegador. Al vencer el plazo, recargar la página o borrar toda la proyección, la opción deja de estar disponible. Para restaurar un traspaso, sus dos cuentas deben seguir existiendo.
+Esta recuperación es temporal en la sesión del navegador y corresponde al escenario donde se eliminó el movimiento. Cambiar de escenario no amplía su plazo ni permite restaurar el movimiento en otro destino. Al vencer el plazo, recargar la página o vaciar ese escenario, la opción deja de estar disponible. Para restaurar un traspaso, sus dos cuentas deben seguir existiendo.
 
 ### Vista compacta en pantallas pequeñas
 
@@ -124,8 +159,11 @@ Con Node.js instalado, ejecuta:
 ```bash
 node --check app.js
 node --check excel-export.js
+node --check treasury-import.js
+node --check treasury-import-worker.js
 node tests/movements.test.cjs
 node tests/excel-export.test.cjs
+node tests/treasury-import.test.cjs
 ```
 
 No se necesitan dependencias para las pruebas. Consulta [la especificación](docs/movement-editing-spec.md) y [la evidencia de verificación](docs/movement-editing-verification.md) para conocer el alcance y los límites de las comprobaciones.
@@ -133,6 +171,8 @@ No se necesitan dependencias para las pruebas. Consulta [la especificación](doc
 La ampliación de banco opcional tiene su [especificación](docs/optional-payment-bank-spec.md) y [evidencia de verificación](docs/optional-payment-bank-verification.md).
 
 La ampliación de horizontes, categorías, traspasos, exportación y operación diaria se describe en [su especificación](docs/treasury-expansion-spec.md). Los resultados y límites de las comprobaciones se registran en [la evidencia de esta ampliación](docs/treasury-expansion-verification.md).
+
+La importación, duplicación y simulación guardada tienen [especificación](docs/import-duplicate-scenarios-spec.md) y [evidencia de verificación](docs/import-duplicate-scenarios-verification.md).
 
 ## Diseño
 
@@ -148,6 +188,7 @@ La ampliación de horizontes, categorías, traspasos, exportación y operación 
 - SVG generado con JavaScript para la gráfica
 - `localStorage` para persistencia local
 - Generación local de Excel mediante OOXML/ZIP, sin dependencias adicionales
+- Lectura local de Excel en Worker con SheetJS CE 0.20.3 vendorizado; [licencia y procedencia](vendor/README.md)
 
 ## Ejecución
 
@@ -167,6 +208,9 @@ También puede publicarse mediante GitHub Pages.
 ├── styles.css
 ├── app.js
 ├── excel-export.js
+├── treasury-import.js
+├── treasury-import-worker.js
+├── vendor/
 ├── README.md
 ├── docs/
 └── tests/

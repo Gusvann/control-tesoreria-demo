@@ -47,9 +47,91 @@ const state = {
   movementEdit: null,
   bankRetirement: null,
   undoDeletions: new Map(),
+  savedScenarios: [],
+  activeScenarioId: "base",
+  scenarioBase: null,
+  scenarioStorageBlocked: false,
+  scenarioLoadError: "",
+  scenarioAction: null,
+  importDraft: null,
 };
 
+loadSavedScenarios();
+
 const els = {
+  savedScenariosPanel: document.querySelector("#savedScenariosPanel"),
+  scenarioSelect: document.querySelector("#scenarioSelect"),
+  createScenarioButton: document.querySelector("#createScenarioButton"),
+  duplicateScenarioButton: document.querySelector("#duplicateScenarioButton"),
+  renameScenarioButton: document.querySelector("#renameScenarioButton"),
+  deleteScenarioButton: document.querySelector("#deleteScenarioButton"),
+  returnToBaseButton: document.querySelector("#returnToBaseButton"),
+  applyScenarioButton: document.querySelector("#applyScenarioButton"),
+  scenarioFeedback: document.querySelector("#scenarioFeedback"),
+  scenarioNameDialog: document.querySelector("#scenarioNameDialog"),
+  scenarioNameForm: document.querySelector("#scenarioNameForm"),
+  scenarioNameTitle: document.querySelector("#scenarioNameTitle"),
+  scenarioNameInput: document.querySelector("#scenarioNameInput"),
+  scenarioSourceField: document.querySelector("#scenarioSourceField"),
+  scenarioSource: document.querySelector("#scenarioSource"),
+  scenarioNameError: document.querySelector("#scenarioNameError"),
+  cancelScenarioName: document.querySelector("#cancelScenarioName"),
+  saveScenarioName: document.querySelector("#saveScenarioName"),
+  scenarioDeleteDialog: document.querySelector("#scenarioDeleteDialog"),
+  scenarioDeleteTitle: document.querySelector("#scenarioDeleteTitle"),
+  scenarioDeleteDescription: document.querySelector("#scenarioDeleteDescription"),
+  scenarioDeleteImpact: document.querySelector("#scenarioDeleteImpact"),
+  scenarioDeleteError: document.querySelector("#scenarioDeleteError"),
+  cancelScenarioDelete: document.querySelector("#cancelScenarioDelete"),
+  confirmScenarioDelete: document.querySelector("#confirmScenarioDelete"),
+  scenarioApplyDialog: document.querySelector("#scenarioApplyDialog"),
+  scenarioApplyTitle: document.querySelector("#scenarioApplyTitle"),
+  scenarioApplyDescription: document.querySelector("#scenarioApplyDescription"),
+  scenarioApplyImpact: document.querySelector("#scenarioApplyImpact"),
+  scenarioApplyError: document.querySelector("#scenarioApplyError"),
+  cancelScenarioApply: document.querySelector("#cancelScenarioApply"),
+  confirmScenarioApply: document.querySelector("#confirmScenarioApply"),
+  scenarioComparisonBody: document.querySelector("#scenarioComparisonBody"),
+  scenarioComparisonHelp: document.querySelector("#scenarioComparisonHelp"),
+  movementEditHelp: document.querySelector("#movementEditHelp"),
+  openImportButton: document.querySelector("#openImportButton"),
+  movementImportDialog: document.querySelector("#movementImportDialog"),
+  importTargetScenario: document.querySelector("#importTargetScenario"),
+  importSteps: document.querySelector("#importSteps"),
+  importError: document.querySelector("#importError"),
+  cancelImport: document.querySelector("#cancelImport"),
+  backImport: document.querySelector("#backImport"),
+  nextImport: document.querySelector("#nextImport"),
+  confirmImport: document.querySelector("#confirmImport"),
+  importSourceStep: document.querySelector("#importSourceStep"),
+  importSource: document.querySelector("#importSource"),
+  importFilePanel: document.querySelector("#importFilePanel"),
+  importFile: document.querySelector("#importFile"),
+  importFileInfo: document.querySelector("#importFileInfo"),
+  importPastePanel: document.querySelector("#importPastePanel"),
+  importPaste: document.querySelector("#importPaste"),
+  importMappingStep: document.querySelector("#importMappingStep"),
+  importSheetField: document.querySelector("#importSheetField"),
+  importSheet: document.querySelector("#importSheet"),
+  importMapping: document.querySelector("#importMapping"),
+  importSourcePreview: document.querySelector("#importSourcePreview"),
+  importMappingError: document.querySelector("#importMappingError"),
+  importHeaderRow: document.querySelector("#importHeaderRow"),
+  importDateOrder: document.querySelector("#importDateOrder"),
+  importNumberFormat: document.querySelector("#importNumberFormat"),
+  importDefaultType: document.querySelector("#importDefaultType"),
+  importDefaultStatus: document.querySelector("#importDefaultStatus"),
+  importAllowPast: document.querySelector("#importAllowPast"),
+  importReviewStep: document.querySelector("#importReviewStep"),
+  importReviewSummary: document.querySelector("#importReviewSummary"),
+  importReviewFilter: document.querySelector("#importReviewFilter"),
+  importReviewBody: document.querySelector("#importReviewBody"),
+  importReviewHelp: document.querySelector("#importReviewHelp"),
+  importSelectValid: document.querySelector("#importSelectValid"),
+  importClearSelection: document.querySelector("#importClearSelection"),
+  importReviewPrev: document.querySelector("#importReviewPrev"),
+  importReviewNext: document.querySelector("#importReviewNext"),
+  importReviewPageLabel: document.querySelector("#importReviewPageLabel"),
   demoModeButton: document.querySelector("#demoModeButton"),
   customModeButton: document.querySelector("#customModeButton"),
   heroEyebrow: document.querySelector("#heroEyebrow"),
@@ -294,19 +376,235 @@ function loadCustomState() {
 
 function saveCustomState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.custom));
+    persistCustomCandidate(state.custom);
   } catch (error) {
     console.warn("No fue posible guardar la proyección en este navegador.", error);
   }
 }
 
 function persistCustomCandidate(candidate) {
+  if (state.activeScenarioId === "base") {
+    commitWorkspace(candidate, state.savedScenarios, "base");
+    return;
+  }
+  const active = state.savedScenarios.find((scenario) => scenario.id === state.activeScenarioId);
+  if (!active) throw new Error("El escenario de destino ya no está disponible.");
+  const scenarios = state.savedScenarios.map((scenario) => scenario.id === active.id
+    ? { ...scenario, ...candidate, updatedAt: new Date().toISOString() } : scenario);
+  commitWorkspace(getBaseProjection(), scenarios, active.id);
+}
+
+function cloneProjection(projection) {
+  return { accounts: projection.accounts.map((account) => ({ ...account })),
+    movements: projection.movements.map((movement) => ({ ...movement })) };
+}
+
+function getBaseProjection() {
+  return state.activeScenarioId === "base" ? state.custom : state.scenarioBase;
+}
+
+function getScenarioProjection(id) {
+  if (id === "base") return getBaseProjection();
+  if (id === state.activeScenarioId) return state.custom;
+  const scenario = state.savedScenarios.find((item) => item.id === id);
+  if (!scenario) throw new Error("El escenario elegido ya no está disponible.");
+  return { accounts: scenario.accounts, movements: scenario.movements };
+}
+
+function getScenarioName(id = state.activeScenarioId) {
+  return id === "base" ? "Base personal" : state.savedScenarios.find((item) => item.id === id)?.name || "Escenario no disponible";
+}
+
+function loadSavedScenarios() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(candidate));
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed.savedScenarios === undefined) return;
+    if (parsed.scenarioVersion !== 1 || !Array.isArray(parsed.savedScenarios) || parsed.savedScenarios.length > 10) {
+      throw new Error("Formato de escenarios desconocido.");
+    }
+    const ids = new Set();
+    const names = new Set();
+    const scenarios = parsed.savedScenarios.map((item) => {
+      if (!item || typeof item.id !== "string" || !item.id || item.id === "base" || ids.has(item.id)
+        || typeof item.name !== "string" || !item.name.trim() || item.name.trim().length > 60
+        || names.has(item.name.trim().toLocaleLowerCase("es"))
+        || !Array.isArray(item.accounts) || item.accounts.length < 1 || item.accounts.length > 10
+        || !Array.isArray(item.movements)) throw new Error("Escenario incompleto.");
+      const accountIds = new Set();
+      item.accounts.forEach((account) => {
+        if (!account || typeof account.id !== "string" || !account.id || accountIds.has(account.id)
+          || typeof account.name !== "string" || !Number.isFinite(account.balance) || account.balance < 0) throw new Error("Cuenta de escenario inválida.");
+        accountIds.add(account.id);
+      });
+      const movementIds = new Set();
+      item.movements.forEach((movement) => {
+        if (!movement || typeof movement.id !== "string" || !movement.id || movementIds.has(movement.id)
+          || !isValidISODate(movement.date) || typeof movement.concept !== "string"
+          || !["inflow", "outflow", "transfer"].includes(movement.type)
+          || !["confirmed", "pending"].includes(movement.status)
+          || !Number.isFinite(movement.amount) || movement.amount < 0) throw new Error("Movimiento de escenario inválido.");
+        movementIds.add(movement.id);
+      });
+      ids.add(item.id);
+      names.add(item.name.trim().toLocaleLowerCase("es"));
+      return { id: item.id, name: item.name.trim(), createdAt: String(item.createdAt || ""),
+        updatedAt: String(item.updatedAt || ""), ...cloneProjection(item) };
+    });
+    state.scenarioBase = state.custom;
+    state.savedScenarios = scenarios;
+    state.activeScenarioId = ids.has(parsed.activeScenarioId) ? parsed.activeScenarioId : "base";
+    if (state.activeScenarioId !== "base") {
+      state.custom = cloneProjection(scenarios.find((item) => item.id === state.activeScenarioId));
+    }
+  } catch (error) {
+    // Legacy loading already handles malformed JSON. Never overwrite an unreadable scenario collection.
+    let hasScenarios = false;
+    try { hasScenarios = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}").savedScenarios !== undefined; } catch (_) { /* legacy */ }
+    if (hasScenarios) {
+      state.scenarioStorageBlocked = true;
+      state.scenarioLoadError = "No se pudieron recuperar los escenarios guardados. Se muestra Base y se bloquea el guardado para conservar los datos originales.";
+    }
+  }
+}
+
+function commitWorkspace(base, scenarios, activeId) {
+  if (state.scenarioStorageBlocked) throw new Error(state.scenarioLoadError);
+  const target = activeId === "base" ? base : scenarios.find((item) => item.id === activeId);
+  if (!target) throw new Error("El escenario de destino ya no está disponible.");
+  const payload = scenarios.length
+    ? { ...base, scenarioVersion: 1, savedScenarios: scenarios, activeScenarioId: activeId }
+    : base;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   } catch (error) {
     throw new Error("No se pudo guardar en este navegador. Los datos no se modificaron. Revisa el espacio o los permisos de almacenamiento e intenta de nuevo.");
   }
-  state.custom = candidate;
+  state.scenarioBase = base;
+  state.savedScenarios = scenarios;
+  state.activeScenarioId = activeId;
+  state.custom = activeId === "base" ? base : { accounts: target.accounts, movements: target.movements };
+}
+
+function validateScenarioName(name, exceptId = "") {
+  if (typeof name !== "string" || !name.trim() || name.trim().length > 60) throw new Error("Escribe un nombre de 1 a 60 caracteres.");
+  const trimmed = name.trim();
+  const key = trimmed.toLocaleLowerCase("es");
+  if (key === "base personal" || state.savedScenarios.some((item) => item.id !== exceptId && item.name.toLocaleLowerCase("es") === key)) {
+    throw new Error("Ya existe un escenario con ese nombre. Elige otro.");
+  }
+  return trimmed;
+}
+
+function requirePersonalScenario() {
+  if (state.mode !== "custom") throw new Error("Abre tu proyección personal para trabajar con escenarios.");
+}
+
+function createSavedScenario(name, sourceId = "base") {
+  requirePersonalScenario();
+  if (state.savedScenarios.length >= 10) throw new Error("Puedes guardar hasta 10 escenarios. Elimina uno antes de crear otro.");
+  const validName = validateScenarioName(name);
+  const projection = cloneProjection(getScenarioProjection(sourceId));
+  const id = createId("scenario");
+  const timestamp = new Date().toISOString();
+  const scenario = { id, name: validName, createdAt: timestamp, updatedAt: timestamp, ...projection };
+  commitWorkspace(getBaseProjection(), [...state.savedScenarios, scenario], id);
+  resetScenarioContext();
+  return id;
+}
+
+function switchSavedScenario(id) {
+  requirePersonalScenario();
+  if (id === state.activeScenarioId) return true;
+  getScenarioProjection(id);
+  if ((els.movementConcept.value.trim() || els.movementAmount.value)
+    && !window.confirm("Hay una captura sin guardar. ¿Quieres descartarla y cambiar de escenario?")) {
+    els.scenarioSelect.value = state.activeScenarioId;
+    return false;
+  }
+  commitWorkspace(getBaseProjection(), state.savedScenarios, id);
+  resetScenarioContext();
+  return true;
+}
+
+function renameSavedScenario(id, name) {
+  requirePersonalScenario();
+  if (id === "base") throw new Error("Base personal conserva su nombre.");
+  if (!state.savedScenarios.some((item) => item.id === id)) throw new Error("El escenario ya no está disponible.");
+  const validName = validateScenarioName(name, id);
+  const scenarios = state.savedScenarios.map((item) => item.id === id
+    ? { ...item, name: validName, updatedAt: new Date().toISOString() } : item);
+  commitWorkspace(getBaseProjection(), scenarios, state.activeScenarioId);
+}
+
+function deleteSavedScenario(id) {
+  requirePersonalScenario();
+  if (id === "base") throw new Error("Base personal no se puede eliminar.");
+  if (!state.savedScenarios.some((item) => item.id === id)) throw new Error("El escenario ya no está disponible.");
+  const wasActive = state.activeScenarioId === id;
+  commitWorkspace(getBaseProjection(), state.savedScenarios.filter((item) => item.id !== id), wasActive ? "base" : state.activeScenarioId);
+  clearScenarioUndo(id);
+  if (wasActive) resetScenarioContext();
+}
+
+function applySavedScenarioToBase(id) {
+  requirePersonalScenario();
+  if (id === "base") throw new Error("Elige una simulación para usarla como Base.");
+  if (state.savedScenarios.length >= 10) throw new Error("Libera un lugar de escenario para conservar una copia de la Base anterior.");
+  const projection = cloneProjection(getScenarioProjection(id));
+  const previousBase = cloneProjection(getBaseProjection());
+  const backupId = createId("scenario");
+  const prefix = `Base anterior · ${todayISO}`;
+  let name = prefix;
+  let counter = 2;
+  while (state.savedScenarios.some((item) => item.name.toLocaleLowerCase("es") === name.toLocaleLowerCase("es"))) name = `${prefix} (${counter++})`;
+  const timestamp = new Date().toISOString();
+  const backup = { id: backupId, name, createdAt: timestamp, updatedAt: timestamp, ...previousBase };
+  commitWorkspace(projection, [...state.savedScenarios, backup], "base");
+  clearScenarioUndo("base");
+  resetScenarioContext();
+  return backupId;
+}
+
+function clearScenarioUndo(id) {
+  [...state.undoDeletions.entries()].forEach(([token, entry]) => {
+    if ((entry.scenarioId || "base") === id) expireUndoDeletion(token);
+  });
+}
+
+function resetScenarioContext() {
+  cancelImportDraft();
+  [els.movementEditDialog, els.bankRetireDialog].forEach((dialog) => { if (dialog.open) dialog.close(); });
+  state.movementEdit = null;
+  state.bankRetirement = null;
+  state.selectedMovementIds.clear();
+  state.movementFilters = createMovementFilters();
+  els.movementForm.reset();
+  els.movementConcept.value = "";
+  els.movementAmount.value = "";
+  els.movementDate.value = todayISO;
+  els.movementType.value = "inflow";
+  els.movementStatus.value = "confirmed";
+  els.movementBank.value = "";
+  els.movementCategory.value = "";
+  els.transferFromBank.value = "";
+  els.transferToBank.value = "";
+  els.captureFeedback.textContent = "";
+  els.movementFeedback.textContent = "";
+  els.exportFeedback.textContent = "";
+  syncMovementFilterControls();
+  renderUndoToasts();
+}
+
+function getScenarioMetrics(projection) {
+  const movements = projection.movements.filter(isMovementIncluded);
+  const initialBalance = getAvailableBalance(projection.accounts);
+  const series = getForecastSeries(movements, initialBalance);
+  const minimum = series.reduce((lowest, point) => point.balance < lowest.balance ? point : lowest, series[0]);
+  const firstShortfall = series.find((point) => point.balance < 0);
+  return { initialBalance, minimumBalance: minimum.balance, minimumDate: toISODate(minimum.date),
+    finalBalance: series.at(-1).balance, firstShortfallDate: firstShortfall ? toISODate(firstShortfall.date) : null };
 }
 
 function getActiveAccounts() {
@@ -355,8 +653,11 @@ function getAccountTransferNet(bankId, movements) {
 }
 
 function isValidMovementAmount(amount) {
-  return typeof amount === "number" && Number.isFinite(amount) && amount > 0
-    && Number.isSafeInteger(Math.round(amount * 100)) && Math.abs(amount * 100 - Math.round(amount * 100)) < 0.000001;
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) return false;
+  const cents = Math.round(amount * 100);
+  const rounded = cents / 100;
+  const tolerance = Math.min(1e-8, Number.EPSILON * Math.max(1, Math.abs(amount)) * 2);
+  return Number.isSafeInteger(cents) && Math.abs(amount - rounded) <= tolerance;
 }
 
 function validateTransfer(movement, accounts = getActiveAccounts()) {
@@ -623,10 +924,11 @@ function prepareMovementEdit(movements, ids, patch, accounts = getActiveAccounts
   return { movements: updated, changedCount };
 }
 
-function commitMovementEdit(ids, patch, mode) {
+function commitMovementEdit(ids, patch, mode, expectedScenarioId = state.activeScenarioId) {
   if (mode !== state.mode || !["demo", "custom"].includes(mode)) {
     throw new Error("La vista cambió. Cierra el editor y selecciona de nuevo los movimientos.");
   }
+  if (mode === "custom" && expectedScenarioId !== state.activeScenarioId) throw new Error("El escenario cambió. Abre de nuevo el movimiento.");
   const result = prepareMovementEdit(getActiveMovements(), ids, patch, getActiveAccounts());
   if (result.changedCount === 0) return 0;
   if (mode === "custom") {
@@ -647,6 +949,69 @@ function commitMovementEdit(ids, patch, mode) {
     });
   }
   return result.changedCount;
+}
+
+function validateNewMovement(input, accounts = state.custom.accounts, allowPast = false) {
+  if (!input || typeof input.concept !== "string" || !input.concept.trim() || input.concept.trim().length > 70) throw new Error("Escribe un concepto de 1 a 70 caracteres.");
+  if (!isValidISODate(input.date) || (!allowPast && input.date < todayISO)) throw new Error("Elige una fecha válida desde hoy; los históricos requieren autorización en la importación.");
+  if (!isValidMovementAmount(input.amount) || input.amount >= 1e13) throw new Error("El importe debe ser positivo, menor a 10 billones y tener hasta dos decimales.");
+  if (!["inflow", "outflow", "transfer"].includes(input.type)) throw new Error("Elige Cobro, Pago o Traspaso.");
+  if (!["confirmed", "pending"].includes(input.status)) throw new Error("Elige Confirmado o Por confirmar.");
+  const movement = { date: input.date, concept: input.concept.trim(), type: input.type, status: input.status, amount: input.amount };
+  if (input.type === "outflow") {
+    const bankId = input.bankId === undefined ? "" : input.bankId;
+    const categoryId = input.categoryId === undefined ? "" : input.categoryId;
+    if (typeof bankId !== "string" || (bankId && accounts.filter((account) => account.id === bankId).length !== 1)) throw new Error("Elige un banco disponible o Sin banco asignado.");
+    if (typeof categoryId !== "string" || (categoryId && !CATEGORY_OPTIONS.some((category) => category.id === categoryId))) throw new Error("Elige una categoría disponible o Sin categoría.");
+    if (bankId) movement.bankId = bankId;
+    if (categoryId) movement.categoryId = categoryId;
+  }
+  if (input.type === "transfer") {
+    movement.fromBankId = input.fromBankId;
+    movement.toBankId = input.toBankId;
+    validateTransfer(movement, accounts);
+  }
+  return movement;
+}
+
+function freshMovementId(used) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const id = createId("movement");
+    if (!used.has(id)) { used.add(id); return id; }
+  }
+  throw new Error("No se pudo generar un identificador único. Intenta de nuevo.");
+}
+
+function commitDuplicateMovement(id, patch = {}, expectedScenarioId = state.activeScenarioId) {
+  requirePersonalScenario();
+  if (expectedScenarioId !== state.activeScenarioId) throw new Error("El escenario cambió. Abre otra vez la copia.");
+  const matches = state.custom.movements.filter((movement) => movement.id === id);
+  if (matches.length !== 1) throw new Error("No se puede identificar el movimiento original de forma única.");
+  const allowed = ["date", "concept", "amount", "status", "bankId", "categoryId", "fromBankId", "toBankId"];
+  if (!patch || typeof patch !== "object" || Object.keys(patch).some((field) => !allowed.includes(field))) throw new Error("La copia contiene campos no admitidos.");
+  if (matches[0].type !== "outflow" && ["bankId", "categoryId"].some((field) => Object.hasOwn(patch, field))) throw new Error("Solo los pagos admiten banco y categoría.");
+  if (matches[0].type !== "transfer" && ["fromBankId", "toBankId"].some((field) => Object.hasOwn(patch, field))) throw new Error("Solo los traspasos admiten cuentas de origen y destino.");
+  const normalized = validateNewMovement({ ...matches[0], ...patch });
+  const used = new Set(state.custom.movements.map((movement) => movement.id));
+  const movement = { id: freshMovementId(used), ...normalized };
+  persistCustomCandidate({ ...state.custom, movements: [...state.custom.movements, movement] });
+  return movement;
+}
+
+function commitImportedMovements(report, selectedRowNumbers, expectedScenarioId, allowPast = false) {
+  requirePersonalScenario();
+  if (expectedScenarioId !== state.activeScenarioId) throw new Error("El escenario cambió. Revisa de nuevo la importación en el destino elegido.");
+  if (!report || !Array.isArray(report.rows) || !Array.isArray(selectedRowNumbers) || !selectedRowNumbers.length
+    || selectedRowNumbers.length > 5000 || new Set(selectedRowNumbers).size !== selectedRowNumbers.length) throw new Error("Selecciona filas válidas y únicas para importar.");
+  const normalized = selectedRowNumbers.map((number) => {
+    const matches = report.rows.filter((row) => row.rowNumber === number);
+    if (matches.length !== 1 || !matches[0].movement || !Array.isArray(matches[0].errors) || matches[0].errors.length) throw new Error(`La fila ${number} no está lista para importar.`);
+    return validateNewMovement(matches[0].movement, state.custom.accounts, allowPast === true);
+  });
+  const used = new Set(state.custom.movements.map((movement) => movement.id));
+  const movements = normalized.map((movement) => ({ id: freshMovementId(used), ...movement }));
+  persistCustomCandidate({ ...state.custom, movements: [...state.custom.movements, ...movements] });
+  return movements;
 }
 
 function getMovementEditPatch() {
@@ -683,6 +1048,17 @@ function updateMovementEditPreview() {
   els.editMovementError.textContent = "";
   els.saveMovementEdit.disabled = true;
   if (!state.movementEdit) return;
+  if (state.movementEdit.kind === "duplicate") {
+    try {
+      validateNewMovement({ ...state.movementEdit.original[0], ...getMovementEditPatch() });
+      els.editMovementPreview.textContent = `Se añadirá una copia a ${getScenarioName()}. El movimiento original se conserva.`;
+      els.saveMovementEdit.disabled = false;
+    } catch (error) {
+      els.editMovementPreview.textContent = "Revisa los datos de la copia antes de agregarla.";
+      els.editMovementError.textContent = error.message;
+    }
+    return;
+  }
   const patch = getMovementEditPatch();
   if (Object.keys(patch).length === 0) {
     els.editMovementPreview.textContent = "Elige los campos y los nuevos valores que quieres aplicar.";
@@ -702,7 +1078,8 @@ function updateMovementEditPreview() {
   }
 }
 
-function openMovementEditor(ids, opener = document.activeElement) {
+function openMovementEditor(ids, opener = document.activeElement, kind = "edit") {
+  if (kind === "duplicate" && (state.mode !== "custom" || ids.length !== 1)) return;
   const active = getActiveMovements();
   const originals = ids.map((id) => active.filter((movement) => movement.id === id));
   if (ids.length === 0 || new Set(ids).size !== ids.length || originals.some((matches) => matches.length !== 1)) {
@@ -711,14 +1088,18 @@ function openMovementEditor(ids, opener = document.activeElement) {
   }
   const movements = originals.map(([movement]) => ({ ...movement }));
   state.movementEdit = {
-    ids: [...ids], mode: state.mode, original: movements, opener,
-    openerId: opener?.dataset?.editMovement,
+    ids: [...ids], mode: state.mode, original: movements, opener, kind, scenarioId: state.activeScenarioId,
+    openerId: opener?.dataset?.editMovement || opener?.dataset?.duplicateMovement,
     openerInCapture: Boolean(opener?.closest?.("#captureList")),
   };
   const single = ids.length === 1;
   const first = movements[0];
   const onlyPayments = movements.every((movement) => movement.type === "outflow");
-  els.movementEditTitle.textContent = single ? "Editar movimiento" : `Editar ${ids.length} movimientos`;
+  els.movementEditTitle.textContent = kind === "duplicate" ? "Duplicar movimiento" : single ? "Editar movimiento" : `Editar ${ids.length} movimientos`;
+  els.saveMovementEdit.textContent = kind === "duplicate" ? "Agregar copia" : "Guardar cambios";
+  els.movementEditHelp.textContent = kind === "duplicate"
+    ? "Revisa la fecha y los datos. La copia se guardará como otro movimiento en el escenario activo."
+    : "Marca los campos que quieres cambiar. Los demás conservarán su valor.";
   els.movementEditDescription.textContent = single
     ? `${getMovementTypeLabel(first)} · ${detailCurrency.format(first.amount)}. Corrige los datos y revisa los cambios antes de guardar.`
     : `Los nuevos valores se aplicarán a los ${ids.length} movimientos seleccionados.`;
@@ -763,8 +1144,9 @@ function finishMovementEditor() {
   }
   if (edit?.openerId && edit.mode === state.mode) {
     const container = edit.openerInCapture ? els.captureList : els.movementsTableBody;
-    const replacement = [...container.querySelectorAll("[data-edit-movement]")]
-      .find((button) => button.dataset.editMovement === edit.openerId);
+    const action = edit.kind === "duplicate" ? "duplicateMovement" : "editMovement";
+    const replacement = [...container.querySelectorAll(edit.kind === "duplicate" ? "[data-duplicate-movement]" : "[data-edit-movement]")]
+      .find((button) => button.dataset[action] === edit.openerId);
     if (replacement) {
       replacement.focus();
       return;
@@ -778,7 +1160,18 @@ function submitMovementEdit(event) {
   const edit = state.movementEdit;
   if (!edit) return;
   try {
-    const count = commitMovementEdit(edit.ids, getMovementEditPatch(), edit.mode);
+    if (edit.kind === "duplicate") {
+      const copy = commitDuplicateMovement(edit.ids[0], getMovementEditPatch(), edit.scenarioId);
+      state.selectedMovementIds.clear();
+      renderCaptureList();
+      renderDashboard();
+      const message = `Movimiento duplicado en ${getScenarioName()}. ${getVisibleMovements().some((movement) => movement.id === copy.id) ? "" : "La copia está fuera de los filtros actuales; elige Todos los movimientos para verla."}`;
+      els.movementFeedback.textContent = message;
+      els.captureFeedback.textContent = message;
+      els.movementEditDialog.close();
+      return;
+    }
+    const count = commitMovementEdit(edit.ids, getMovementEditPatch(), edit.mode, edit.scenarioId);
     if (!count) {
       els.editMovementError.textContent = "No hay cambios que guardar.";
       return;
@@ -856,6 +1249,8 @@ function getForecastSeries(filteredMovements, startingBalance) {
 }
 
 function setMode(mode, options = {}) {
+  cancelImportDraft();
+  [els.scenarioNameDialog, els.scenarioDeleteDialog, els.scenarioApplyDialog].forEach((dialog) => { if (dialog.open) dialog.close(); });
   if (els.movementEditDialog.open) els.movementEditDialog.close();
   if (els.bankRetireDialog.open) els.bankRetireDialog.close();
   state.mode = mode;
@@ -893,6 +1288,7 @@ function setMode(mode, options = {}) {
 
   renderBuilder();
   renderDashboard();
+  renderUndoToasts();
 
   if (options.scrollToBuilder && isCustom) {
     requestAnimationFrame(() => {
@@ -1048,6 +1444,8 @@ function renderCaptureList() {
             <button class="capture-edit-button" type="button"
               aria-label="Editar ${escapeHTML(movement.concept)}"
               data-edit-movement="${escapeHTML(movement.id)}">Editar</button>
+            <button class="movement-duplicate-button" type="button" aria-label="Duplicar ${escapeHTML(movement.concept)}"
+              data-duplicate-movement="${escapeHTML(movement.id)}">Duplicar</button>
             <button
               class="icon-button"
               type="button"
@@ -1068,6 +1466,7 @@ function renderBuilder() {
   renderBanksEditor();
   renderCaptureBank();
   renderCaptureList();
+  renderSavedScenarios();
 }
 
 function renderAccounts(accounts, movements = getFilteredMovements()) {
@@ -1193,7 +1592,7 @@ function renderMovements() {
           </td>
           <td role="cell" data-label="Acciones" class="movement-row-actions"><button type="button" class="movement-edit-button"
             data-edit-movement="${escapeHTML(movement.id)}"
-            aria-label="Editar ${escapeHTML(movement.concept)}">Editar</button>${state.mode === "custom" ? `<button type="button" class="movement-delete-button" data-delete-movement="${escapeHTML(movement.id)}" aria-label="Eliminar ${escapeHTML(movement.concept)}">Eliminar</button>` : ""}</td>
+            aria-label="Editar ${escapeHTML(movement.concept)}">Editar</button>${state.mode === "custom" ? `<button type="button" class="movement-duplicate-button" data-duplicate-movement="${escapeHTML(movement.id)}" aria-label="Duplicar ${escapeHTML(movement.concept)}">Duplicar</button><button type="button" class="movement-delete-button" data-delete-movement="${escapeHTML(movement.id)}" aria-label="Eliminar ${escapeHTML(movement.concept)}">Eliminar</button>` : ""}</td>
         </tr>
       `;
     })
@@ -1514,6 +1913,7 @@ function renderDashboard() {
   renderMovements();
   const hasChartData = startingBalance !== 0 || filteredMovements.length > 0;
   renderChart(forecastSeries, { hasData: hasChartData });
+  if (state.mode === "custom") renderSavedScenarios();
 
   els.liveRegion.textContent = `Escenario actualizado a ${state.horizon} días, con movimientos por confirmar ${
     state.includePending ? "incluidos" : "excluidos"
@@ -1591,7 +1991,7 @@ function deleteMovement(id) {
   const movement = { ...matches[0] };
   persistCustomCandidate({ ...state.custom, movements: state.custom.movements.filter((entry) => entry.id !== id) });
   const token = createId("undo");
-  const entry = { movement, index, expiresAt: Date.now() + 5000 };
+  const entry = { movement, index, scenarioId: state.activeScenarioId, expiresAt: Date.now() + 5000 };
   state.undoDeletions.set(token, entry);
   entry.timer = setTimeout(() => expireUndoDeletion(token), 5000);
   state.selectedMovementIds.delete(id);
@@ -1603,7 +2003,9 @@ function deleteMovement(id) {
 
 function renderUndoToasts() {
   const focusedToken = document.activeElement?.dataset?.undoDelete;
-  els.undoToasts.innerHTML = [...state.undoDeletions.entries()].map(([token, entry]) => `<div class="undo-toast" role="status">
+  els.undoToasts.innerHTML = [...state.undoDeletions.entries()]
+    .filter(([, entry]) => state.mode === "custom" && (entry.scenarioId || "base") === state.activeScenarioId)
+    .map(([token, entry]) => `<div class="undo-toast" role="status">
     <div class="undo-toast-copy"><strong>Movimiento eliminado</strong><span>${escapeHTML(entry.movement.concept)}</span><small>Puedes deshacer durante 5 segundos.</small></div>
     <button type="button" data-undo-delete="${escapeHTML(token)}" aria-label="Deshacer eliminación de ${escapeHTML(entry.movement.concept)}">Deshacer</button>
   </div>`).join("");
@@ -1630,6 +2032,7 @@ function undoDeleteMovement(token, now = Date.now()) {
     expireUndoDeletion(token);
     throw new Error("El plazo de 5 segundos para deshacer terminó.");
   }
+  if (state.mode !== "custom" || (entry.scenarioId || "base") !== state.activeScenarioId) throw new Error("Vuelve al escenario de esta eliminación para deshacerla dentro de su plazo.");
   if (state.custom.movements.some((movement) => movement.id === entry.movement.id)) {
     throw new Error("Ya existe un movimiento con ese identificador. No se restauró otro registro.");
   }
@@ -1681,12 +2084,23 @@ function exportMovementsToExcel() {
 }
 
 function resetCustomProjection() {
-  const confirmed = window.confirm("¿Quieres borrar todos los bancos, saldos y movimientos capturados?");
+  const confirmed = window.confirm(`¿Quieres vaciar los bancos, saldos y movimientos de ${getScenarioName()}?${state.savedScenarios.length ? " Los demás escenarios se conservarán." : ""}`);
   if (!confirmed) {
     return;
   }
 
   const resetState = createDefaultCustomState();
+  if (state.savedScenarios.length || state.scenarioStorageBlocked) {
+    try {
+      persistCustomCandidate(resetState);
+      clearScenarioUndo(state.activeScenarioId);
+      resetScenarioContext();
+      renderBuilder();
+      renderDashboard();
+      els.captureFeedback.textContent = `${getScenarioName()} volvió a cero. Los demás escenarios se conservaron.`;
+    } catch (error) { els.captureFeedback.textContent = error.message; }
+    return;
+  }
   try {
     localStorage.removeItem(STORAGE_KEY);
   } catch (error) {
@@ -1694,6 +2108,7 @@ function resetCustomProjection() {
     return;
   }
   state.custom = resetState;
+  state.scenarioBase = resetState;
   state.selectedMovementIds.clear();
   [...state.undoDeletions.keys()].forEach(expireUndoDeletion);
   els.captureFeedback.textContent = "La proyección volvió a cero.";
@@ -1701,7 +2116,624 @@ function resetCustomProjection() {
   renderDashboard();
 }
 
+const IMPORT_FIELDS = [
+  ["date", "Fecha *"], ["concept", "Concepto *"], ["amount", "Importe *"],
+  ["type", "Tipo"], ["status", "Estatus"], ["bank", "Banco del pago"],
+  ["category", "Categoría del pago"], ["fromBank", "Cuenta de origen"],
+  ["toBank", "Cuenta de destino"], ["sourceId", "ID del origen (opcional)"],
+];
+
+function openImportDialog() {
+  try {
+    requirePersonalScenario();
+    if (state.scenarioStorageBlocked) throw new Error(state.scenarioLoadError);
+    cancelImportDraft();
+    state.importDraft = {
+      scenarioId: state.activeScenarioId, fingerprint: JSON.stringify(state.custom),
+      sourceDocument: null, sheetIndex: 0, mapping: {}, report: null,
+      selectedRows: new Set(), reviewPage: 0, step: "source", busy: false,
+      abortController: new AbortController(), opener: document.activeElement,
+    };
+    els.importTargetScenario.textContent = getScenarioName();
+    els.importSource.value = "file";
+    els.importFile.value = "";
+    els.importPaste.value = "";
+    els.importFileInfo.textContent = "";
+    els.importHeaderRow.value = "1";
+    els.importDateOrder.value = "DMY";
+    els.importNumberFormat.value = "es-MX";
+    els.importDefaultType.value = "outflow";
+    els.importDefaultStatus.value = "confirmed";
+    els.importAllowPast.checked = false;
+    els.importReviewFilter.value = "all";
+    els.importError.textContent = "";
+    els.importMappingError.textContent = "";
+    syncImportSource();
+    renderImportStep();
+    els.movementImportDialog.showModal();
+    els.importSource.focus();
+  } catch (error) {
+    els.captureFeedback.textContent = error.message;
+  }
+}
+
+function cancelImportDraft() {
+  const draft = state.importDraft;
+  state.importDraft = null;
+  draft?.abortController.abort();
+  if (els.movementImportDialog.open) els.movementImportDialog.close();
+  if (draft?.opener?.isConnected) draft.opener.focus();
+}
+
+function assertImportContext(draft) {
+  if (state.importDraft !== draft || state.mode !== "custom" || state.activeScenarioId !== draft.scenarioId
+    || JSON.stringify(state.custom) !== draft.fingerprint) {
+    throw new Error("Los datos o el escenario cambiaron. Cancela y vuelve a revisar la importación en el destino elegido.");
+  }
+}
+
+function syncImportSource() {
+  const isPaste = els.importSource.value === "paste";
+  els.importPastePanel.hidden = !isPaste;
+  els.importFilePanel.hidden = isPaste;
+  els.importError.textContent = "";
+}
+
+function renderImportStep() {
+  const draft = state.importDraft;
+  if (!draft) return;
+  els.importSourceStep.hidden = draft.step !== "source";
+  els.importMappingStep.hidden = draft.step !== "mapping";
+  els.importReviewStep.hidden = draft.step !== "review";
+  els.importSteps.querySelectorAll("[data-import-step]").forEach((item) => {
+    if (item.dataset.importStep === draft.step) item.setAttribute("aria-current", "step");
+    else item.removeAttribute("aria-current");
+  });
+  els.backImport.hidden = draft.step === "source";
+  els.backImport.disabled = draft.busy;
+  els.nextImport.hidden = draft.step === "review";
+  els.nextImport.disabled = draft.busy;
+  els.nextImport.textContent = draft.busy ? "Leyendo…" : draft.step === "mapping" ? "Revisar movimientos" : "Continuar";
+  els.confirmImport.hidden = draft.step !== "review";
+  els.confirmImport.disabled = draft.busy || draft.selectedRows.size === 0;
+  els.confirmImport.textContent = `Importar ${draft.selectedRows.size} movimiento${draft.selectedRows.size === 1 ? "" : "s"} seleccionado${draft.selectedRows.size === 1 ? "" : "s"}`;
+  [els.importSource, els.importFile, els.importPaste].forEach((control) => { control.disabled = draft.busy; });
+  els.movementImportDialog.setAttribute("aria-busy", String(draft.busy));
+}
+
+function importCellText(cell) {
+  if (cell && typeof cell === "object" && cell.error) return String(cell.error);
+  const value = cell && typeof cell === "object" ? cell.dateISO || cell.value : cell;
+  return value == null ? "" : String(value);
+}
+
+function getImportSheet() {
+  return state.importDraft?.sourceDocument?.sheets[state.importDraft.sheetIndex];
+}
+
+function readImportHeaderRow(sheet) {
+  const headerRow = Number(els.importHeaderRow.value);
+  if (els.importHeaderRow.value === "" || !Number.isInteger(headerRow) || headerRow < 0 || headerRow >= sheet.rows.length) {
+    throw new Error("Elige una fila de encabezados con datos debajo, o usa 0 si no hay encabezados.");
+  }
+  return headerRow;
+}
+
+function renderImportMapping(reset = false) {
+  const draft = state.importDraft;
+  const sheet = getImportSheet();
+  if (!draft || !sheet) return;
+  try {
+    els.importMappingError.textContent = "";
+    const headerRow = readImportHeaderRow(sheet);
+    const width = Math.max(0, ...sheet.rows.map((row) => row.length));
+    if (reset) draft.mapping = TreasuryImport.suggestMapping(sheet, { headerRow });
+    const headers = headerRow ? sheet.rows[headerRow - 1] : [];
+    const columns = Array.from({ length: width }, (_, index) => ({
+      index, label: `${index + 1} · ${importCellText(headers[index]).slice(0, 70) || "Sin encabezado"}`,
+    }));
+    els.importMapping.innerHTML = IMPORT_FIELDS.map(([key, label]) => `<div class="field-group">
+      <label for="importMap-${key}">${label}</label>
+      <select id="importMap-${key}" data-import-map="${key}">
+        <option value="">${["type", "status"].includes(key) ? "Usar predeterminado" : ["date", "concept", "amount"].includes(key) ? "Elige una columna" : "Sin columna"}</option>
+        ${columns.map((column) => `<option value="${column.index}" ${draft.mapping[key] === column.index ? "selected" : ""}>${escapeHTML(column.label)}</option>`).join("")}
+      </select></div>`).join("");
+    const previewStart = Math.max(0, headerRow - 1);
+    const previewRows = sheet.rows.slice(previewStart, previewStart + 6);
+    els.importSourcePreview.innerHTML = `<table><caption>Primeras ${previewRows.length} filas desde ${headerRow ? "el encabezado" : "el inicio"}</caption>
+      <thead><tr><th scope="col">Fila</th>${columns.map((column) => `<th scope="col">Col. ${column.index + 1}</th>`).join("")}</tr></thead>
+      <tbody>${previewRows.map((row, index) => `<tr><th scope="row">${previewStart + index + 1}</th>${columns.map((column) => `<td>${escapeHTML(importCellText(row[column.index]).slice(0, 180))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  } catch (error) {
+    els.importMappingError.textContent = error.message;
+  }
+}
+
+async function nextImportStep() {
+  const draft = state.importDraft;
+  if (!draft || draft.busy) return;
+  els.importError.textContent = "";
+  try {
+    assertImportContext(draft);
+    if (draft.step === "source") {
+      if (typeof TreasuryImport === "undefined") throw new Error("No se pudo cargar el importador. Recarga la página e intenta de nuevo.");
+      draft.busy = true;
+      renderImportStep();
+      let documentData;
+      if (els.importSource.value === "paste") {
+        documentData = TreasuryImport.parseText(els.importPaste.value, { delimiter: "auto" });
+      } else {
+        const file = els.importFile.files?.[0];
+        if (!file) throw new Error("Selecciona un archivo o cambia el origen a Pegar tabla.");
+        if (file.size > TreasuryImport.limits.fileBytes) throw new Error("El archivo supera el límite de 10 MiB. Divide la tabla e importa cada parte.");
+        const extension = file.name.split(".").pop().toLowerCase();
+        if (!["xlsx", "csv", "tsv"].includes(extension)) throw new Error("Elige un archivo .xlsx, .csv o .tsv.");
+        els.importFileInfo.textContent = `Leyendo ${file.name}…`;
+        const bytes = await file.arrayBuffer();
+        if (state.importDraft !== draft) return;
+        if (extension === "xlsx") documentData = await TreasuryImport.readXlsx(bytes, { signal: draft.abortController.signal });
+        else {
+          let source;
+          try { source = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+          catch (_) { throw new Error("Guarda el CSV o TSV con codificación UTF-8, o pega sus celdas directamente."); }
+          documentData = TreasuryImport.parseText(source, { delimiter: extension === "tsv" ? "\t" : "auto" });
+        }
+      }
+      if (state.importDraft !== draft) return;
+      assertImportContext(draft);
+      if (!documentData?.sheets?.length) throw new Error("El origen no contiene hojas con datos.");
+      draft.sourceDocument = documentData;
+      draft.sheetIndex = 0;
+      draft.report = null;
+      draft.selectedRows.clear();
+      els.importSheet.innerHTML = documentData.sheets.map((sheet, index) => `<option value="${index}">${escapeHTML(sheet.name)}</option>`).join("");
+      els.importSheet.value = "0";
+      els.importSheetField.hidden = documentData.sheets.length === 1;
+      draft.step = "mapping";
+      renderImportMapping(true);
+      els.importHeaderRow.focus();
+    } else if (draft.step === "mapping") {
+      const sheet = getImportSheet();
+      const headerRow = readImportHeaderRow(sheet);
+      const report = TreasuryImport.preview(sheet, {
+        headerRow, mapping: draft.mapping, dateOrder: els.importDateOrder.value,
+        numberFormat: els.importNumberFormat.value,
+        defaults: { type: els.importDefaultType.value, status: els.importDefaultStatus.value },
+      }, {
+        accounts: state.custom.accounts, categories: CATEGORY_OPTIONS, existingMovements: state.custom.movements,
+        todayISO, minDate: els.importAllowPast.checked ? null : todayISO,
+      });
+      if (!report.rows.length) throw new Error("No se encontraron movimientos debajo de los encabezados.");
+      draft.report = report;
+      draft.allowPast = els.importAllowPast.checked;
+      draft.selectedRows = new Set(report.rows.filter((row) => row.movement && !row.errors.length && !row.duplicates.length).map((row) => row.rowNumber));
+      draft.reviewPage = 0;
+      els.importReviewFilter.value = "all";
+      draft.step = "review";
+      renderImportReview();
+      els.importReviewFilter.focus();
+    }
+  } catch (error) {
+    if (state.importDraft === draft) {
+      els.importError.textContent = error.message;
+      els.importError.focus();
+    }
+  } finally {
+    if (state.importDraft === draft) {
+      draft.busy = false;
+      renderImportStep();
+    }
+  }
+}
+
+function renderImportReview() {
+  const draft = state.importDraft;
+  if (!draft?.report) return;
+  const { rows, summary } = draft.report;
+  const filter = els.importReviewFilter.value;
+  const visible = rows.filter((row) => filter === "all" || (filter === "valid" && !row.errors.length)
+    || (filter === "error" && row.errors.length) || (filter === "duplicate" && row.duplicates.length));
+  const pages = Math.max(1, Math.ceil(visible.length / 50));
+  draft.reviewPage = Math.max(0, Math.min(pages - 1, draft.reviewPage));
+  const pageRows = visible.slice(draft.reviewPage * 50, (draft.reviewPage + 1) * 50);
+  els.importReviewSummary.innerHTML = `<span><strong>${summary.valid}</strong> válidas</span><span><strong>${summary.invalid}</strong> con errores</span><span><strong>${summary.possibleDuplicates}</strong> posibles duplicados</span><span><strong>${draft.selectedRows.size}</strong> seleccionadas</span>`;
+  const packageWarnings = (draft.sourceDocument.warnings || []).map((warning) => typeof warning === "string" ? warning : warning.message).filter(Boolean);
+  els.importReviewHelp.textContent = `Las filas con errores no se pueden seleccionar. Los posibles duplicados empiezan desmarcados; puedes seleccionarlos si son movimientos distintos.${draft.allowPast ? " Los históricos se consultan en Todos los movimientos y no afectan la proyección desde hoy." : ""}${packageWarnings.length ? ` Avisos del archivo: ${packageWarnings.join(" ")}` : ""}`;
+  els.importReviewBody.innerHTML = pageRows.length ? pageRows.map((row) => {
+    const movement = row.movement;
+    const sourceRow = getImportSheet()?.rows[row.rowNumber - 1];
+    const sourceConcept = importCellText(sourceRow?.[draft.mapping.concept]).trim().slice(0, 70);
+    const invalid = row.errors.length > 0 || !movement;
+    const selected = draft.selectedRows.has(row.rowNumber);
+    const messages = [...row.errors.map((issue) => issue.message), ...row.warnings.map((issue) => issue.message)];
+    if (row.duplicates.length) messages.push(`Posible duplicado: ${row.duplicates.map((duplicate) => duplicate.source === "import" ? `fila ${duplicate.rowNumber} de esta importación` : "movimiento ya guardado").filter((value, index, values) => values.indexOf(value) === index).join(", ")}.`);
+    const notes = movement ? `${getMovementTypeLabel(movement)} · ${movement.status === "confirmed" ? "Confirmado" : "Por confirmar"}${movement.type === "outflow" ? ` · ${getMovementBankLabel(movement)} · ${getMovementCategoryLabel(movement)}` : movement.type === "transfer" ? ` · ${getMovementAccountLabel(movement)}` : ""}` : "Corrige esta fila en el origen y vuelve a cargarla.";
+    return `<tr role="row" class="${selected ? "is-selected" : ""}">
+      <td role="cell"><input type="checkbox" class="movement-checkbox" data-import-row="${row.rowNumber}" aria-label="Seleccionar fila ${row.rowNumber}" ${selected ? "checked" : ""} ${invalid ? "disabled" : ""}></td>
+      <td role="cell">${row.rowNumber}</td><td role="cell"><strong>${escapeHTML(movement?.concept || sourceConcept || "Fila con errores")}</strong><small>${escapeHTML(notes)}</small></td>
+      <td role="cell">${movement ? escapeHTML(movement.date) : "—"}</td><td role="cell" class="align-right">${movement ? detailCurrency.format(movement.amount) : "—"}</td>
+      <td role="cell">${invalid ? "Con errores" : row.duplicates.length ? "Posible duplicado" : "Lista para importar"}${messages.map((message) => `<small>${escapeHTML(message)}</small>`).join("")}</td>
+    </tr>`;
+  }).join("") : '<tr><td colspan="6">No hay filas con este filtro.</td></tr>';
+  els.importReviewPrev.disabled = draft.reviewPage === 0;
+  els.importReviewNext.disabled = draft.reviewPage >= pages - 1;
+  els.importReviewPageLabel.textContent = `Página ${draft.reviewPage + 1} de ${pages} · ${visible.length} filas`;
+  renderImportStep();
+}
+
+function confirmImportMovements() {
+  const draft = state.importDraft;
+  if (!draft || draft.step !== "review" || draft.busy) return;
+  els.importError.textContent = "";
+  try {
+    assertImportContext(draft);
+    draft.busy = true;
+    renderImportStep();
+    const added = commitImportedMovements(draft.report, [...draft.selectedRows], draft.scenarioId, draft.allowPast);
+    const historical = added.filter((movement) => movement.date < todayISO).length;
+    const destination = getScenarioName();
+    cancelImportDraft();
+    state.selectedMovementIds.clear();
+    renderBuilder();
+    renderDashboard();
+    const message = `Se ${added.length === 1 ? "importó" : "importaron"} ${added.length} movimiento${added.length === 1 ? "" : "s"} en ${destination}.${historical ? ` ${historical} histórico${historical === 1 ? "" : "s"}; puedes consultarlos en Todos los movimientos.` : ""}`;
+    els.captureFeedback.textContent = message;
+    els.movementFeedback.textContent = message;
+    els.openImportButton.focus();
+  } catch (error) {
+    els.importError.textContent = error.message;
+    els.importError.focus();
+  } finally {
+    if (state.importDraft === draft) { draft.busy = false; renderImportStep(); }
+  }
+}
+
+function bindImportEvents() {
+  els.openImportButton.addEventListener("click", openImportDialog);
+  els.cancelImport.addEventListener("click", cancelImportDraft);
+  els.movementImportDialog.addEventListener("close", cancelImportDraft);
+  els.movementImportDialog.addEventListener("cancel", cancelImportDraft);
+  els.importSource.addEventListener("change", syncImportSource);
+  els.importFile.addEventListener("change", () => {
+    const file = els.importFile.files?.[0];
+    els.importFileInfo.textContent = file ? `${file.name} · ${(file.size / 1024).toFixed(1)} KiB` : "";
+    els.importError.textContent = "";
+  });
+  els.nextImport.addEventListener("click", nextImportStep);
+  els.backImport.addEventListener("click", () => {
+    const draft = state.importDraft;
+    if (!draft || draft.busy) return;
+    draft.step = draft.step === "review" ? "mapping" : "source";
+    els.importError.textContent = "";
+    renderImportStep();
+    (draft.step === "source" ? els.importSource : els.importHeaderRow).focus();
+  });
+  els.importSheet.addEventListener("change", () => {
+    const draft = state.importDraft;
+    if (!draft) return;
+    draft.sheetIndex = Number(els.importSheet.value);
+    els.importHeaderRow.value = "1";
+    renderImportMapping(true);
+  });
+  els.importHeaderRow.addEventListener("change", () => renderImportMapping(true));
+  els.importMapping.addEventListener("change", (event) => {
+    const select = event.target.closest("[data-import-map]");
+    if (select && state.importDraft) state.importDraft.mapping[select.dataset.importMap] = select.value === "" ? null : Number(select.value);
+  });
+  els.importReviewFilter.addEventListener("change", () => {
+    if (state.importDraft) state.importDraft.reviewPage = 0;
+    renderImportReview();
+  });
+  els.importReviewBody.addEventListener("change", (event) => {
+    const checkbox = event.target.closest("[data-import-row]");
+    const draft = state.importDraft;
+    if (!checkbox || !draft?.report) return;
+    const number = Number(checkbox.dataset.importRow);
+    const row = draft.report.rows.find((item) => item.rowNumber === number);
+    if (!row || row.errors.length || !row.movement) return;
+    if (checkbox.checked) draft.selectedRows.add(number);
+    else draft.selectedRows.delete(number);
+    renderImportReview();
+    els.importReviewBody.querySelector(`[data-import-row="${number}"]`)?.focus();
+  });
+  els.importSelectValid.addEventListener("click", () => {
+    const draft = state.importDraft;
+    if (!draft?.report) return;
+    draft.selectedRows = new Set(draft.report.rows.filter((row) => row.movement && !row.errors.length && !row.duplicates.length).map((row) => row.rowNumber));
+    renderImportReview();
+  });
+  els.importClearSelection.addEventListener("click", () => { state.importDraft?.selectedRows.clear(); renderImportReview(); });
+  [[els.importReviewPrev, -1], [els.importReviewNext, 1]].forEach(([button, delta]) => button.addEventListener("click", () => {
+    if (state.importDraft) state.importDraft.reviewPage += delta;
+    renderImportReview();
+  }));
+  els.confirmImport.addEventListener("click", confirmImportMovements);
+}
+
+function renderSavedScenarios() {
+  els.savedScenariosPanel.hidden = state.mode !== "custom";
+  if (state.mode !== "custom") return;
+  els.dashboardKicker.textContent = `TU ESCENARIO · ${getScenarioName()}`;
+  els.resetProjection.textContent = "Vaciar escenario";
+
+  const scenarios = [{ id: "base", name: "Base personal" }, ...state.savedScenarios];
+  const isBase = state.activeScenarioId === "base";
+  const blocked = state.scenarioStorageBlocked;
+  const atCapacity = state.savedScenarios.length >= 10;
+  els.scenarioSelect.innerHTML = scenarios.map((scenario) =>
+    `<option value="${escapeHTML(scenario.id)}"${scenario.id === state.activeScenarioId ? " selected" : ""}>${escapeHTML(scenario.name)}</option>`).join("");
+  els.scenarioSelect.value = state.activeScenarioId;
+  els.scenarioSelect.disabled = blocked;
+  els.createScenarioButton.disabled = blocked || atCapacity;
+  els.duplicateScenarioButton.disabled = blocked || atCapacity;
+  els.renameScenarioButton.disabled = blocked || isBase;
+  els.deleteScenarioButton.disabled = blocked || isBase;
+  els.applyScenarioButton.disabled = blocked || isBase;
+  els.returnToBaseButton.disabled = blocked || isBase;
+  const capacityMessage = "Ya hay 10 escenarios guardados. Elimina uno para crear otro.";
+  els.createScenarioButton.title = atCapacity ? capacityMessage : "";
+  els.duplicateScenarioButton.title = atCapacity ? capacityMessage : "";
+  els.applyScenarioButton.title = atCapacity ? "Libera un lugar para guardar la copia automática de Base." : "";
+  if (blocked) els.scenarioFeedback.textContent = state.scenarioLoadError;
+
+  const metrics = scenarios.map((scenario) => ({ ...scenario, metrics: getScenarioMetrics(getScenarioProjection(scenario.id)) }));
+  const base = metrics[0].metrics;
+  const dateFormatter = new Intl.DateTimeFormat("es-MX", { day: "numeric", month: "short", year: "numeric" });
+  const dateLabel = (value) => dateFormatter.format(parseISODate(value));
+  const deltaLabel = (value) => {
+    const rounded = Math.round(value * 100) / 100;
+    return rounded === 0 ? `${detailCurrency.format(0)} · sin cambio frente a Base`
+      : `${rounded > 0 ? "+" : ""}${detailCurrency.format(rounded)} frente a Base`;
+  };
+  els.scenarioComparisonHelp.textContent = `Del ${dateLabel(todayISO)} al ${dateLabel(toISODate(addDays(today, state.horizon)))}. `
+    + `Movimientos por confirmar ${state.includePending ? "incluidos" : "excluidos"} en todos los escenarios. Los filtros de movimientos no cambian esta comparación.`;
+  els.scenarioComparisonBody.innerHTML = metrics.map(({ id, name, metrics: item }) => {
+    const active = id === state.activeScenarioId;
+    const shortfall = item.firstShortfallDate ? dateLabel(item.firstShortfallDate) : "Sin faltante en el período";
+    const baseShortfall = base.firstShortfallDate ? dateLabel(base.firstShortfallDate) : "sin faltante en el período";
+    return `<tr role="row"${active ? ' class="is-active" aria-current="true"' : ""}>
+      <td role="cell" data-label="Escenario"><strong>${escapeHTML(name)}</strong>${active ? '<small>Escenario activo</small>' : ""}<small>Saldo inicial: ${detailCurrency.format(item.initialBalance)}</small></td>
+      <td role="cell" data-label="Saldo mínimo y fecha"><strong>${detailCurrency.format(item.minimumBalance)}</strong><small>${escapeHTML(dateLabel(item.minimumDate))}</small><span class="scenario-delta">${escapeHTML(deltaLabel(item.minimumBalance - base.minimumBalance))}</span></td>
+      <td role="cell" data-label="Saldo final"><strong>${detailCurrency.format(item.finalBalance)}</strong><span class="scenario-delta">${escapeHTML(deltaLabel(item.finalBalance - base.finalBalance))}</span></td>
+      <td role="cell" data-label="Primer faltante"><strong>${escapeHTML(shortfall)}</strong>${id === "base" ? "" : `<small>${item.firstShortfallDate === base.firstShortfallDate ? "Igual que Base" : `Base: ${escapeHTML(baseShortfall)}`}</small>`}</td>
+    </tr>`;
+  }).join("");
+}
+
+function getScenarioUIFingerprints() {
+  return {
+    active: JSON.stringify(state.custom),
+    base: JSON.stringify(getBaseProjection()),
+    collection: JSON.stringify(state.savedScenarios),
+  };
+}
+
+function captureScenarioUIAction(kind) {
+  requirePersonalScenario();
+  if (state.scenarioStorageBlocked) throw new Error(state.scenarioLoadError);
+  return { kind, id: state.activeScenarioId, expectedActiveId: state.activeScenarioId,
+    fingerprints: getScenarioUIFingerprints(), opener: document.activeElement };
+}
+
+function assertScenarioUIContext(kinds) {
+  requirePersonalScenario();
+  const action = state.scenarioAction;
+  if (!action || !kinds.includes(action.kind)) throw new Error("Abre otra vez la acción del escenario.");
+  const current = getScenarioUIFingerprints();
+  if (state.activeScenarioId !== action.expectedActiveId
+    || Object.keys(current).some((key) => current[key] !== action.fingerprints[key])) {
+    throw new Error("Los datos o el escenario cambiaron. Cierra este diálogo y vuelve a revisarlo antes de guardar.");
+  }
+  if (state.scenarioStorageBlocked) throw new Error(state.scenarioLoadError);
+  getScenarioProjection(action.id);
+  return action;
+}
+
+function confirmScenarioCaptureDiscard() {
+  return !(els.movementConcept.value.trim() || els.movementAmount.value)
+    || window.confirm("Hay una captura sin guardar. ¿Quieres descartarla y continuar con esta acción del escenario?");
+}
+
+function suggestScenarioCopyName(id) {
+  const name = getScenarioName(id);
+  let counter = 1;
+  let candidate;
+  do {
+    const suffix = counter === 1 ? " · copia" : ` · copia ${counter}`;
+    candidate = `${name.slice(0, 60 - suffix.length).trimEnd()}${suffix}`;
+    counter += 1;
+  } while (state.savedScenarios.some((scenario) => scenario.name.toLocaleLowerCase("es") === candidate.toLocaleLowerCase("es")));
+  return candidate;
+}
+
+function closeScenarioUIDialog(dialog, restoreFocus = true) {
+  const action = state.scenarioAction;
+  state.scenarioAction = null;
+  if (dialog.open) dialog.close();
+  if (restoreFocus && state.mode === "custom") {
+    const target = action?.opener?.isConnected && !action.opener.disabled ? action.opener : els.scenarioSelect;
+    target.focus();
+  }
+}
+
+function openScenarioName(kind) {
+  try {
+    if (!["create", "duplicate", "rename"].includes(kind)) throw new Error("Elige una acción de escenario válida.");
+    const action = captureScenarioUIAction(kind);
+    if (kind === "rename" && action.id === "base") throw new Error("Base personal conserva su nombre.");
+    if (kind !== "rename" && state.savedScenarios.length >= 10) throw new Error("Puedes guardar hasta 10 escenarios. Elimina uno antes de crear otro.");
+    state.scenarioAction = action;
+    els.scenarioNameForm.reset();
+    els.scenarioNameTitle.textContent = kind === "rename" ? "Renombrar escenario" : kind === "duplicate" ? "Duplicar escenario" : "Crear escenario";
+    els.saveScenarioName.textContent = kind === "rename" ? "Guardar nombre" : kind === "duplicate" ? "Crear copia" : "Crear escenario";
+    els.scenarioNameInput.value = kind === "rename" ? getScenarioName(action.id) : kind === "duplicate" ? suggestScenarioCopyName(action.id) : "";
+    els.scenarioNameInput.removeAttribute("aria-invalid");
+    els.scenarioSourceField.hidden = kind !== "create";
+    els.scenarioSource.disabled = kind !== "create";
+    els.scenarioSource.value = "base";
+    els.scenarioSource.querySelector('option[value="current"]').textContent = `Desde el escenario actual: ${getScenarioName(action.id)}`;
+    els.scenarioNameError.textContent = "";
+    els.saveScenarioName.disabled = false;
+    els.scenarioNameDialog.showModal();
+    els.scenarioNameInput.focus();
+    els.scenarioNameInput.select();
+  } catch (error) {
+    els.scenarioFeedback.textContent = error.message;
+  }
+}
+
+function submitScenarioName(event) {
+  event.preventDefault();
+  try {
+    const action = assertScenarioUIContext(["create", "duplicate", "rename"]);
+    const name = validateScenarioName(els.scenarioNameInput.value, action.kind === "rename" ? action.id : "");
+    if (action.kind === "create" && !["base", "current"].includes(els.scenarioSource.value)) throw new Error("Elige de qué escenario se creará la copia.");
+    if (action.kind !== "rename" && state.savedScenarios.length >= 10) throw new Error("Puedes guardar hasta 10 escenarios. Elimina uno antes de crear otro.");
+    if (action.kind !== "rename" && !confirmScenarioCaptureDiscard()) return;
+    // A confirmation may yield control to the browser: check the captured context again.
+    assertScenarioUIContext([action.kind]);
+    els.saveScenarioName.disabled = true;
+    if (action.kind === "rename") renameSavedScenario(action.id, name);
+    else createSavedScenario(name, action.kind === "duplicate" || els.scenarioSource.value === "current" ? action.id : "base");
+    closeScenarioUIDialog(els.scenarioNameDialog, false);
+    renderBuilder();
+    renderDashboard();
+    els.scenarioFeedback.textContent = action.kind === "rename" ? `Escenario renombrado: ${name}.` : `Escenario creado y activo: ${name}.`;
+    els.scenarioSelect.focus();
+  } catch (error) {
+    els.scenarioNameError.textContent = error.message;
+    els.saveScenarioName.disabled = false;
+  }
+}
+
+function openScenarioDelete() {
+  try {
+    const action = captureScenarioUIAction("delete");
+    if (action.id === "base") throw new Error("Base personal no se puede eliminar.");
+    const projection = getScenarioProjection(action.id);
+    state.scenarioAction = action;
+    els.scenarioDeleteTitle.textContent = `Eliminar ${getScenarioName(action.id)}`;
+    els.scenarioDeleteDescription.textContent = "Se eliminarán los bancos y movimientos de este escenario y volverás a Base personal. Esta eliminación no se puede deshacer.";
+    els.scenarioDeleteImpact.innerHTML = `<dl>
+      <div><dt>Bancos del escenario</dt><dd>${projection.accounts.length}</dd></div>
+      <div><dt>Movimientos del escenario</dt><dd>${projection.movements.length}</dd></div>
+      <div><dt>Saldo inicial</dt><dd>${detailCurrency.format(getAvailableBalance(projection.accounts))}</dd></div>
+      </dl><p>Base personal y los demás escenarios se conservarán.</p>`;
+    els.scenarioDeleteError.textContent = "";
+    els.confirmScenarioDelete.disabled = false;
+    els.scenarioDeleteDialog.showModal();
+    els.cancelScenarioDelete.focus();
+  } catch (error) {
+    els.scenarioFeedback.textContent = error.message;
+  }
+}
+
+function submitScenarioDelete() {
+  try {
+    const action = assertScenarioUIContext(["delete"]);
+    const name = getScenarioName(action.id);
+    if (!confirmScenarioCaptureDiscard()) return;
+    assertScenarioUIContext(["delete"]);
+    els.confirmScenarioDelete.disabled = true;
+    deleteSavedScenario(action.id);
+    closeScenarioUIDialog(els.scenarioDeleteDialog, false);
+    renderBuilder();
+    renderDashboard();
+    els.scenarioFeedback.textContent = `Escenario eliminado: ${name}. Base personal está activa.`;
+    els.scenarioSelect.focus();
+  } catch (error) {
+    els.scenarioDeleteError.textContent = error.message;
+    els.confirmScenarioDelete.disabled = false;
+  }
+}
+
+function openScenarioApply() {
+  try {
+    const action = captureScenarioUIAction("apply");
+    if (action.id === "base") throw new Error("Elige una simulación para usarla como Base.");
+    const source = getScenarioProjection(action.id);
+    const base = getScenarioProjection("base");
+    state.scenarioAction = action;
+    els.scenarioApplyTitle.textContent = "Usar este escenario como Base";
+    els.scenarioApplyDescription.textContent = `Los bancos y movimientos de «${getScenarioName(action.id)}» reemplazarán a los de Base personal. Antes se guardará automáticamente una copia de la Base actual.`;
+    els.scenarioApplyImpact.innerHTML = `<dl>
+      <div><dt>Base que se respaldará</dt><dd>${base.accounts.length} bancos · ${base.movements.length} movimientos</dd></div>
+      <div><dt>Contenido de la nueva Base</dt><dd>${source.accounts.length} bancos · ${source.movements.length} movimientos</dd></div>
+      <div><dt>Saldo inicial de la nueva Base</dt><dd>${detailCurrency.format(getAvailableBalance(source.accounts))}</dd></div>
+      </dl><p>El escenario original se conservará y Base personal quedará activa.</p><p>La copia automática ocupa un lugar de escenario y se guarda en este navegador.</p>`;
+    els.scenarioApplyError.textContent = state.savedScenarios.length >= 10 ? "Libera un lugar de escenario para conservar una copia de la Base anterior." : "";
+    els.confirmScenarioApply.disabled = state.savedScenarios.length >= 10;
+    els.scenarioApplyDialog.showModal();
+    els.cancelScenarioApply.focus();
+  } catch (error) {
+    els.scenarioFeedback.textContent = error.message;
+  }
+}
+
+function submitScenarioApply() {
+  try {
+    const action = assertScenarioUIContext(["apply"]);
+    if (state.savedScenarios.length >= 10) throw new Error("Libera un lugar de escenario para conservar una copia de la Base anterior.");
+    const name = getScenarioName(action.id);
+    if (!confirmScenarioCaptureDiscard()) return;
+    assertScenarioUIContext(["apply"]);
+    els.confirmScenarioApply.disabled = true;
+    const backupId = applySavedScenarioToBase(action.id);
+    const backupName = getScenarioName(backupId);
+    closeScenarioUIDialog(els.scenarioApplyDialog, false);
+    renderBuilder();
+    renderDashboard();
+    els.scenarioFeedback.textContent = `Base personal usa los datos de ${name}. La Base anterior se conservó como «${backupName}».`;
+    els.scenarioSelect.focus();
+  } catch (error) {
+    els.scenarioApplyError.textContent = error.message;
+    els.confirmScenarioApply.disabled = state.savedScenarios.length >= 10;
+  }
+}
+
+function bindScenarioEvents() {
+  const switchScenario = (id) => {
+    try {
+      if (!switchSavedScenario(id)) return;
+      renderBuilder();
+      renderDashboard();
+      els.scenarioFeedback.textContent = `Escenario activo: ${getScenarioName()}.`;
+      els.scenarioSelect.focus();
+    } catch (error) {
+      els.scenarioSelect.value = state.activeScenarioId;
+      els.scenarioFeedback.textContent = error.message;
+    }
+  };
+  els.scenarioSelect.addEventListener("change", () => switchScenario(els.scenarioSelect.value));
+  els.returnToBaseButton.addEventListener("click", () => switchScenario("base"));
+  els.createScenarioButton.addEventListener("click", () => openScenarioName("create"));
+  els.duplicateScenarioButton.addEventListener("click", () => openScenarioName("duplicate"));
+  els.renameScenarioButton.addEventListener("click", () => openScenarioName("rename"));
+  els.scenarioNameForm.addEventListener("submit", submitScenarioName);
+  els.scenarioNameInput.addEventListener("input", () => { els.scenarioNameError.textContent = ""; });
+  els.deleteScenarioButton.addEventListener("click", openScenarioDelete);
+  els.confirmScenarioDelete.addEventListener("click", submitScenarioDelete);
+  els.applyScenarioButton.addEventListener("click", openScenarioApply);
+  els.confirmScenarioApply.addEventListener("click", submitScenarioApply);
+  [
+    [els.scenarioNameDialog, els.cancelScenarioName, ["create", "duplicate", "rename"]],
+    [els.scenarioDeleteDialog, els.cancelScenarioDelete, ["delete"]],
+    [els.scenarioApplyDialog, els.cancelScenarioApply, ["apply"]],
+  ].forEach(([dialog, cancelButton, kinds]) => {
+    cancelButton.addEventListener("click", () => closeScenarioUIDialog(dialog));
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeScenarioUIDialog(dialog);
+    });
+    dialog.addEventListener("close", () => {
+      if (!dialog.open && kinds.includes(state.scenarioAction?.kind)) state.scenarioAction = null;
+    });
+  });
+}
+
+
 function bindEvents() {
+  bindImportEvents();
+  bindScenarioEvents();
   els.demoModeButton.addEventListener("click", () => setMode("demo"));
   els.customModeButton.addEventListener("click", () => setMode("custom", { scrollToBuilder: true }));
 
@@ -1824,6 +2856,8 @@ function bindEvents() {
     container.addEventListener("click", (event) => {
       const button = event.target.closest("[data-edit-movement]");
       if (button) openMovementEditor([button.dataset.editMovement], button);
+      const duplicate = event.target.closest("[data-duplicate-movement]");
+      if (duplicate) openMovementEditor([duplicate.dataset.duplicateMovement], duplicate, "duplicate");
     });
     container.addEventListener("dblclick", (event) => {
       if (event.target.closest("button, input, select, label, a")) return;

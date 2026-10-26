@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const importModule = require("../treasury-import.js");
 
 const script = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 assert.match(script, /\binitialize\(\);\s*$/u, "The application must retain its final initialize() call.");
@@ -77,7 +78,10 @@ class Element {
   }
 }
 
-function harness(saved) {
+let harnessSequence = 0;
+
+function harness(saved, options = {}) {
+  const harnessId = ++harnessSequence;
   const elements = new Map();
   const values = new Map(saved ? [[STORAGE_KEY, JSON.stringify(saved)]] : []);
   const clock = { now: Date.now() };
@@ -111,7 +115,12 @@ function harness(saved) {
     Date: ClockDate,
     Set,
     Map,
-    crypto: { randomUUID: () => `synthetic-${++nextId}` },
+    structuredClone,
+    AbortController,
+    TextDecoder,
+    TextEncoder,
+    TreasuryImport: options.importer || importModule,
+    crypto: { randomUUID: () => `synthetic-${harnessId}-${++nextId}` },
     localStorage: storage,
     document: {
       querySelector(selector) {
@@ -1333,5 +1342,632 @@ test("EXT reset: declining confirmation preserves persisted data and recoveries"
   assert.deepEqual(h.json("[...state.selectedMovementIds]"), ["b"]);
   assert.deepEqual(h.json("[...state.undoDeletions.entries()]"), recovery);
   assert.equal(h.timers.size, 1);
+});
+
+// Import, duplication and saved simulations. Import parsing itself is tested
+// by its module; these cases exercise the application commit boundary using
+// normalized reports, including hostile reports that claim to be valid.
+function reportRow(rowNumber, rowMovement, extra = {}) {
+  return { rowNumber, movement: rowMovement, errors: [], warnings: [], duplicates: [], ...extra };
+}
+
+function scenarioState(h) {
+  return h.json("({ base: getBaseProjection(), scenarios: state.savedScenarios, activeId: state.activeScenarioId, current: state.custom })");
+}
+
+function scenarioProjection(h, id) {
+  return h.json('input === "base" ? getBaseProjection() : ((s) => ({ accounts: s.accounts, movements: s.movements }))(state.savedScenarios.find(s => s.id === input))', id);
+}
+
+function commitReport(h, report, selected, scenarioId = "base", allowPast = false) {
+  return h.json("commitImportedMovements(input.report, input.selected, input.scenarioId, input.allowPast)", { report, selected, scenarioId, allowPast });
+}
+
+test("SIM legacy: previous projections load as Base without rewriting or losing their records", () => {
+  const legacy = { accounts: treasuryAccounts, movements: [payment("p", "2028-05-01", { amount: 12.34, bankId: "bank-a", categoryId: "costos" }), transfer("t", "2028-05-02"), movement("i", "2028-05-03")] };
+  const h = harness(legacy);
+  assert.equal(h.run("state.activeScenarioId"), "base");
+  assert.deepEqual(h.json("state.savedScenarios"), []);
+  assert.deepEqual(h.json("getBaseProjection()"), legacy);
+  assert.deepEqual(h.saved(), legacy);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("SIM create: a saved scenario activates an independent copy while preserving record and account IDs", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1), { bankId: "bank-a", categoryId: "nomina", amount: 12.34 }), transfer("t", h.day(2))]);
+  const base = h.json("state.custom");
+  const id = h.run('createSavedScenario("  Simulación inicial  ")');
+  assert.ok(id && id !== "base");
+  assert.equal(h.run("state.activeScenarioId"), id);
+  assert.equal(h.run("state.savedScenarios[0].name"), "Simulación inicial");
+  assert.deepEqual(h.json("state.custom"), base);
+  assert.deepEqual(h.json("getBaseProjection()"), base);
+  assert.deepEqual(scenarioProjection(h, id), base);
+  assert.equal(h.run("state.custom.accounts === getBaseProjection().accounts"), false);
+  assert.equal(h.run("state.custom.accounts[0] === getBaseProjection().accounts[0]"), false);
+  assert.equal(h.run("state.custom.movements[0] === getBaseProjection().movements[0]"), false);
+  assert.ok(h.run("state.savedScenarios[0].createdAt"));
+  assert.ok(h.run("state.savedScenarios[0].updatedAt"));
+  assert.equal(h.storage.writes, 1);
+});
+
+test("SIM isolation: editing a scenario leaves Base and another scenario unchanged", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1), { amount: 100 })]);
+  const base = h.json("state.custom");
+  const first = h.run('createSavedScenario("Primero")');
+  const second = h.run('createSavedScenario("Segundo")');
+  h.run("switchSavedScenario(input);", first);
+  h.run('commitMovementEdit(["p"], { amount: 55.25, concept: "Solo primero" }, "custom"); state.custom.accounts[0].name = "Banco del primero"; persistCustomCandidate(state.custom);');
+  assert.deepEqual(h.json("getBaseProjection()"), base);
+  assert.deepEqual(scenarioProjection(h, second), base);
+  assert.equal(scenarioProjection(h, first).movements[0].amount, 55.25);
+  assert.equal(scenarioProjection(h, first).accounts[0].name, "Banco del primero");
+  h.run("switchSavedScenario(input);", second);
+  assert.deepEqual(h.json("state.custom"), base);
+});
+
+test("SIM sources: default creation copies Base and explicit creation can copy another saved scenario", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1), { amount: 100 })]);
+  const modified = h.run('createSavedScenario("Modificado")');
+  h.run('commitMovementEdit(["p"], { amount: 400 }, "custom");');
+  const fromBase = h.run('createSavedScenario("Desde Base")');
+  assert.equal(scenarioProjection(h, fromBase).movements[0].amount, 100);
+  const fromSaved = h.run('createSavedScenario("Desde modificado", input)', modified);
+  assert.equal(scenarioProjection(h, fromSaved).movements[0].amount, 400);
+  assert.equal(scenarioProjection(h, fromSaved).movements[0].id, "p");
+  const before = scenarioState(h);
+  assert.throws(() => h.run('createSavedScenario("Origen ausente", "missing")'));
+  assert.deepEqual(scenarioState(h), before);
+});
+
+test("SIM names: empty, oversized and case-insensitive duplicate names are rejected atomically", () => {
+  const h = harness();
+  seedTreasury(h, []);
+  for (const name of ["", "   ", "a".repeat(61)]) assert.throws(() => h.run("createSavedScenario(input)", name));
+  assert.equal(h.run("state.savedScenarios.length"), 0);
+  assert.equal(h.storage.writes, 0);
+  const first = h.run('createSavedScenario("Simulación")');
+  const second = h.run('createSavedScenario("Otro")');
+  const before = scenarioState(h);
+  assert.throws(() => h.run('createSavedScenario("sIMULACIÓN")'));
+  assert.throws(() => h.run('renameSavedScenario(input, "SIMULACIÓN")', second));
+  assert.throws(() => h.run('renameSavedScenario(input, " ")', first));
+  assert.deepEqual(scenarioState(h), before);
+  h.run('renameSavedScenario(input, "  Nombre nuevo  ");', first);
+  assert.equal(h.run("state.savedScenarios.find(s => s.id === input).name", first), "Nombre nuevo");
+});
+
+test("SIM persistence: Base remains at the legacy root and every scenario plus active choice survives reload", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1), { amount: 123.45 })]);
+  const base = h.json("state.custom");
+  const first = h.run('createSavedScenario("Uno")');
+  h.run('commitMovementEdit(["p"], { amount: 200 }, "custom");');
+  const second = h.run('createSavedScenario("Dos")');
+  h.run('commitMovementEdit(["p"], { amount: 300 }, "custom");');
+  const saved = h.saved();
+  assert.equal(saved.scenarioVersion, 1);
+  assert.equal(saved.activeScenarioId, second);
+  assert.deepEqual(saved.accounts, base.accounts);
+  assert.deepEqual(saved.movements, base.movements);
+  assert.equal(saved.savedScenarios.length, 2);
+  const reloaded = harness(saved);
+  assert.equal(reloaded.run("state.activeScenarioId"), second);
+  assert.equal(reloaded.run("state.custom.movements[0].amount"), 300);
+  assert.equal(scenarioProjection(reloaded, first).movements[0].amount, 200);
+  assert.deepEqual(reloaded.json("getBaseProjection()"), base);
+  assert.equal(reloaded.storage.writes, 0);
+});
+
+test("SIM persistence: an unavailable saved active ID falls back to Base without discarding valid scenarios", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  h.run('createSavedScenario("Conservado");');
+  const saved = h.saved();
+  saved.activeScenarioId = "not-there";
+  const reloaded = harness(saved);
+  assert.equal(reloaded.run("state.activeScenarioId"), "base");
+  assert.equal(reloaded.run("state.savedScenarios.length"), 1);
+  assert.deepEqual(reloaded.json("state.custom.movements"), saved.movements);
+});
+
+test("SIM atomicity: rejected storage does not create, switch, rename or delete scenarios", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  const id = h.run('createSavedScenario("Original")');
+  const before = scenarioState(h);
+  const saved = h.saved();
+  h.storage.fail = true;
+  for (const code of ['createSavedScenario("Nuevo")', 'switchSavedScenario("base")', 'renameSavedScenario(input, "Renombrado")', 'deleteSavedScenario(input)']) {
+    assert.throws(() => h.run(code, id));
+    assert.deepEqual(scenarioState(h), before);
+    assert.deepEqual(h.saved(), saved);
+  }
+});
+
+test("SIM deletion: deleting the active scenario returns to Base and preserves other simulations", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  const base = h.json("state.custom");
+  const first = h.run('createSavedScenario("Primero")');
+  const second = h.run('createSavedScenario("Segundo")');
+  const before = scenarioState(h);
+  assert.throws(() => h.run('deleteSavedScenario("base")'));
+  assert.throws(() => h.run('switchSavedScenario("missing")'));
+  assert.deepEqual(scenarioState(h), before);
+  h.run("deleteSavedScenario(input);", second);
+  assert.equal(h.run("state.activeScenarioId"), "base");
+  assert.deepEqual(h.json("state.custom"), base);
+  assert.deepEqual(h.json("state.savedScenarios.map(s => s.id)"), [first]);
+});
+
+test("SIM limit: a full catalog rejects creation and applying without room for its mandatory Base backup", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  const ids = [];
+  for (let index = 1; index <= 10; index += 1) ids.push(h.run("createSavedScenario(input)", `Escenario ${index}`));
+  const before = scenarioState(h);
+  const saved = h.saved();
+  assert.throws(() => h.run('createSavedScenario("Once")'));
+  assert.throws(() => h.run("applySavedScenarioToBase(input)", ids[0]));
+  assert.deepEqual(scenarioState(h), before);
+  assert.deepEqual(h.saved(), saved);
+});
+
+test("SIM apply: replacing Base creates an independent backup and preserves the source scenario", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1), { amount: 100 })]);
+  const originalBase = h.json("state.custom");
+  const sourceId = h.run('createSavedScenario("Aplicar")');
+  h.run('commitMovementEdit(["p"], { amount: 450 }, "custom");');
+  const sourceProjection = h.json("state.custom");
+  const writesBefore = h.storage.writes;
+  const backupId = h.run("applySavedScenarioToBase(input)", sourceId);
+  assert.ok(backupId && backupId !== sourceId && backupId !== "base");
+  assert.equal(h.run("state.activeScenarioId"), "base");
+  assert.deepEqual(h.json("getBaseProjection()"), sourceProjection);
+  assert.deepEqual(scenarioProjection(h, sourceId), sourceProjection);
+  assert.deepEqual(scenarioProjection(h, backupId), originalBase);
+  assert.equal(h.storage.writes, writesBefore + 1, "backup and replacement must persist as one transaction");
+  h.run('commitMovementEdit(["p"], { amount: 500 }, "custom");');
+  assert.equal(scenarioProjection(h, sourceId).movements[0].amount, 450);
+  assert.equal(scenarioProjection(h, backupId).movements[0].amount, 100);
+});
+
+test("SIM apply: storage failure leaves Base, scenario catalog and active data intact", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  const id = h.run('createSavedScenario("Cambios")');
+  h.run('commitMovementEdit(["p"], { amount: 700 }, "custom");');
+  const before = scenarioState(h);
+  const saved = h.saved();
+  h.storage.fail = true;
+  assert.throws(() => h.run("applySavedScenarioToBase(input)", id));
+  assert.deepEqual(scenarioState(h), before);
+  assert.deepEqual(h.saved(), saved);
+});
+
+test("SIM comparison: scenarios share date/horizon and metrics stay independent of table filters", () => {
+  const h = harness();
+  seed(h, [payment("p", h.day(2), { amount: 1200 }), movement("i", h.day(3), { amount: 500 }), transfer("t", h.day(1), { amount: 600 })], [
+    { id: "bank-a", name: "Banco Alfa", balance: 600 }, { id: "bank-b", name: "Banco Beta", balance: 400 },
+  ]);
+  const id = h.run('createSavedScenario("Pago aplazado")');
+  h.run('commitMovementEdit(["p"], { date: input }, "custom");', h.day(15));
+  const before = scenarioState(h);
+  const writes = h.storage.writes;
+  h.run('state.horizon = 14; state.movementFilters.query = "sin coincidencias";');
+  const base14 = h.json("getScenarioMetrics(getBaseProjection())");
+  const scenario14 = h.json("getScenarioMetrics(state.custom)");
+  assert.equal(base14.initialBalance, 1000);
+  assert.equal(base14.minimumBalance, -200);
+  assert.equal(base14.finalBalance, 300);
+  assert.equal(scenario14.initialBalance, 1000);
+  assert.equal(scenario14.minimumBalance, 1000);
+  assert.equal(scenario14.finalBalance, 1500);
+  assert.equal(scenario14.firstShortfallDate, null);
+  assert.equal(h.run('((value) => value instanceof Date ? toISODate(value) : value)(getScenarioMetrics(getBaseProjection()).firstShortfallDate)'), h.day(2));
+  h.run("state.horizon = 30;");
+  assert.equal(h.run("getScenarioMetrics(getBaseProjection()).finalBalance"), 300);
+  assert.equal(h.run("getScenarioMetrics(state.custom).finalBalance"), 300);
+  assert.deepEqual(scenarioState(h), before);
+  assert.equal(h.storage.writes, writes);
+  assert.equal(h.run("state.activeScenarioId"), id);
+});
+
+test("SIM comparison: the global pending rule applies equally and internal transfers remain neutral", () => {
+  const h = harness();
+  seedTreasury(h, [movement("pending", h.day(1), { status: "pending", amount: 250 }), transfer("internal", h.day(2), { status: "pending", amount: 900 })]);
+  h.run('createSavedScenario("Igual")');
+  h.run("state.includePending = false;");
+  assert.equal(h.run("getScenarioMetrics(getBaseProjection()).finalBalance"), 1750);
+  assert.equal(h.run("getScenarioMetrics(state.custom).finalBalance"), 1750);
+  h.run("state.includePending = true;");
+  assert.equal(h.run("getScenarioMetrics(getBaseProjection()).finalBalance"), 2000);
+  assert.deepEqual(h.json("getScenarioMetrics(state.custom)"), h.json("getScenarioMetrics(getBaseProjection())"));
+});
+
+test("DUP identity: repeated duplications preserve source fields and create distinct movement IDs", () => {
+  const h = harness();
+  const original = payment("p", h.day(1), { bankId: "bank-a", categoryId: "nomina", amount: 45.67, status: "pending" });
+  seedTreasury(h, [original]);
+  const first = h.json('commitDuplicateMovement("p", {})');
+  const second = h.json('commitDuplicateMovement("p", {})');
+  assert.notEqual(first.id, original.id);
+  assert.notEqual(first.id, second.id);
+  assert.deepEqual({ ...first, id: original.id }, original);
+  assert.deepEqual({ ...second, id: original.id }, original);
+  assert.deepEqual(h.json("state.custom.movements[0]"), original);
+  assert.equal(h.run("state.custom.movements.length"), 3);
+  assert.ok(Math.abs(h.run("getPeriodTotals(getFilteredMovements()).outflows") - 137.01) < 1e-8);
+  assert.equal(h.storage.writes, 2);
+});
+
+test("DUP validation: a historical source needs an explicitly valid new date and stays unchanged", () => {
+  const h = harness();
+  const old = payment("old", h.day(-2), { amount: 15 });
+  seedTreasury(h, [old]);
+  assert.throws(() => h.run('commitDuplicateMovement("old", {})'));
+  assert.equal(h.storage.writes, 0);
+  const copy = h.json('commitDuplicateMovement("old", { date: input, concept: "Copia revisada", amount: 20.25 })', h.day());
+  assert.equal(copy.date, h.day());
+  assert.equal(copy.concept, "Copia revisada");
+  assert.equal(copy.amount, 20.25);
+  assert.deepEqual(h.json("state.custom.movements[0]"), old);
+});
+
+test("DUP validation: forbidden IDs, invalid amounts and invalid transfer endpoints cannot create records", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1)), transfer("t", h.day(2))]);
+  const before = h.json("state.custom");
+  for (const [id, patch] of [["missing", {}], ["p", { id: "forced" }], ["p", { amount: 0 }], ["p", { amount: 1.001 }], ["p", { amount: 1e13 }], ["p", { categoryId: "unknown" }], ["t", { toBankId: "bank-a" }], ["t", { fromBankId: "missing" }]]) {
+    assert.throws(() => h.run("commitDuplicateMovement(input.id, input.patch)", { id, patch }));
+  }
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("DUP isolation: duplication targets only the active personal scenario and rejects a stale origin", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  const base = h.json("state.custom");
+  const scenarioId = h.run('createSavedScenario("Duplicar aquí")');
+  assert.throws(() => h.run('commitDuplicateMovement("p", {}, "base")'));
+  h.run('commitDuplicateMovement("p", {}, input);', scenarioId);
+  assert.equal(h.run("state.custom.movements.length"), 2);
+  assert.deepEqual(h.json("getBaseProjection()"), base);
+  h.run('state.mode = "demo";');
+  assert.throws(() => h.run('commitDuplicateMovement("d2", {})'));
+  assert.equal(h.run("state.custom.movements.length"), 2);
+});
+
+test("DUP atomicity: storage rejection preserves the source and the entire scenario state", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  h.run('createSavedScenario("Sin pérdida")');
+  const before = scenarioState(h);
+  const saved = h.saved();
+  h.storage.fail = true;
+  assert.throws(() => h.run('commitDuplicateMovement("p", { amount: 500 })'));
+  assert.deepEqual(scenarioState(h), before);
+  assert.deepEqual(h.saved(), saved);
+});
+
+test("IMP commit: selected rows append with new IDs, including intentionally selected identical rows", () => {
+  const h = harness();
+  const existing = payment("existing", h.day(1), { amount: 50, bankId: "bank-a" });
+  seedTreasury(h, [existing]);
+  const report = { rows: [reportRow(2, { ...existing }, { duplicates: ["existing"] }), reportRow(3, { ...existing }, { duplicates: ["existing"] }), reportRow(4, movement("unused", h.day(2)))] };
+  const originalReport = JSON.parse(JSON.stringify(report));
+  const imported = commitReport(h, report, [2, 3]);
+  assert.equal(imported.length, 2);
+  assert.equal(new Set([existing.id, ...imported.map(row => row.id)]).size, 3);
+  assert.equal(h.run("state.custom.movements.length"), 3);
+  assert.equal(h.run("getPeriodTotals(getFilteredMovements()).outflows"), 150);
+  assert.deepEqual(h.json("state.custom.movements[0]"), existing);
+  assert.deepEqual(report, originalReport, "committing must not alter the review report");
+  assert.equal(h.storage.writes, 1);
+});
+
+test("IMP selection: invalid selected rows reject the whole batch while unselected errors do not block chosen valid rows", () => {
+  const h = harness();
+  seedTreasury(h, []);
+  const report = { rows: [reportRow(2, payment("a", h.day(1))), reportRow(3, payment("b", h.day(2)), { errors: ["Error de validación de origen"] })] };
+  assert.throws(() => commitReport(h, report, [2, 3]));
+  assert.deepEqual(h.json("state.custom.movements"), []);
+  assert.equal(h.storage.writes, 0);
+  const imported = commitReport(h, report, [2]);
+  assert.equal(imported.length, 1);
+  assert.equal(h.run("state.custom.movements.length"), 1);
+});
+
+test("IMP selection: empty, repeated, missing or ambiguous row numbers cannot commit", () => {
+  const h = harness();
+  seedTreasury(h, []);
+  const report = { rows: [reportRow(2, payment("a", h.day(1)))] };
+  for (const selected of [[], [2, 2], [2, 99]]) assert.throws(() => commitReport(h, report, selected));
+  const ambiguous = { rows: [reportRow(2, payment("a", h.day(1))), reportRow(2, payment("b", h.day(2)))] };
+  assert.throws(() => commitReport(h, ambiguous, [2]));
+  assert.deepEqual(h.json("state.custom.movements"), []);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("IMP revalidation: apparently clean reports cannot bypass movement, amount or account rules", () => {
+  const h = harness();
+  seedTreasury(h, [payment("existing", h.day(1))]);
+  const before = h.json("state.custom");
+  const invalid = [
+    payment("bad", h.day(1), { amount: 0 }), payment("bad", h.day(1), { amount: -5 }), payment("bad", h.day(1), { amount: 1.001 }),
+    payment("bad", h.day(1), { amount: 1e13 }), payment("bad", h.day(1), { amount: Infinity }),
+    payment("bad", h.day(1), { concept: " " }), payment("bad", h.day(1), { concept: "a".repeat(71) }),
+    payment("bad", "2028-02-30"), payment("bad", h.day(1), { bankId: "unknown" }), payment("bad", h.day(1), { categoryId: "unknown" }),
+    payment("bad", h.day(1), { status: "paid" }), movement("bad", h.day(1), { type: "unknown" }),
+    transfer("bad", h.day(1), { toBankId: "bank-a" }), transfer("bad", h.day(1), { fromBankId: "missing" }),
+  ];
+  for (const row of invalid) {
+    const report = { rows: [reportRow(2, payment("valid", h.day(1))), reportRow(3, row)] };
+    assert.throws(() => commitReport(h, report, [2, 3]), JSON.stringify(row));
+    assert.deepEqual(h.json("state.custom"), before);
+  }
+  assert.equal(h.storage.writes, 0);
+});
+
+test("IMP historical: past dates require explicit permission and remain outside the current forecast", () => {
+  const h = harness();
+  seedTreasury(h, []);
+  const report = { rows: [reportRow(2, payment("old", h.day(-1), { amount: 250 }))] };
+  assert.throws(() => commitReport(h, report, [2]));
+  assert.equal(h.storage.writes, 0);
+  const imported = commitReport(h, report, [2], "base", true);
+  assert.equal(imported[0].date, h.day(-1));
+  assert.equal(h.run("state.custom.movements.length"), 1);
+  assert.deepEqual(h.json("getFilteredMovements()"), []);
+});
+
+test("IMP transfer: a valid imported transfer retains endpoints and has zero consolidated cash effect", () => {
+  const h = harness();
+  seedTreasury(h, []);
+  const report = { rows: [reportRow(2, transfer("external-id", h.day(1), { amount: 80.25 }))] };
+  const imported = commitReport(h, report, [2]);
+  assert.notEqual(imported[0].id, "external-id");
+  assert.equal(imported[0].type, "transfer");
+  assert.equal(imported[0].fromBankId, "bank-a");
+  assert.equal(imported[0].toBankId, "bank-b");
+  assert.equal(h.run("getForecastSeries(getFilteredMovements(), getAvailableBalance()).at(-1).balance"), 1750);
+  assert.deepEqual(h.json("getPeriodTotals(getFilteredMovements())"), { inflows: 0, outflows: 0, inflowCount: 0, outflowCount: 0 });
+});
+
+test("IMP atomicity: failed storage keeps every scenario and the report intact", () => {
+  const h = harness();
+  seedTreasury(h, [payment("existing", h.day(1))]);
+  const id = h.run('createSavedScenario("Importar")');
+  const report = { rows: [reportRow(2, payment("new", h.day(2)))] };
+  const originalReport = JSON.parse(JSON.stringify(report));
+  const before = scenarioState(h);
+  const saved = h.saved();
+  h.storage.fail = true;
+  assert.throws(() => commitReport(h, report, [2], id));
+  assert.deepEqual(scenarioState(h), before);
+  assert.deepEqual(h.saved(), saved);
+  assert.deepEqual(report, originalReport);
+});
+
+test("IMP isolation: a stale expected scenario is rejected and a valid import changes only its target", () => {
+  const h = harness();
+  seedTreasury(h, [payment("existing", h.day(1))]);
+  const base = h.json("state.custom");
+  const id = h.run('createSavedScenario("Destino")');
+  const report = { rows: [reportRow(2, payment("new", h.day(2)))] };
+  assert.throws(() => commitReport(h, report, [2], "base"));
+  assert.equal(h.run("state.custom.movements.length"), 1);
+  commitReport(h, report, [2], id);
+  assert.equal(h.run("state.custom.movements.length"), 2);
+  assert.deepEqual(h.json("getBaseProjection()"), base);
+  assert.equal(scenarioProjection(h, id).movements.length, 2);
+});
+
+test("SIM undo: a recovery belongs to its originating scenario even when IDs are shared across copies", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  const id = h.run('createSavedScenario("Origen")');
+  const token = h.run('deleteMovement("p")');
+  assert.equal(h.run("state.undoDeletions.get(input).scenarioId", token), id);
+  h.run('switchSavedScenario("base");');
+  assert.throws(() => h.run("undoDeleteMovement(input)", token));
+  assert.equal(h.run("state.custom.movements.length"), 1);
+  assert.equal(h.run("state.undoDeletions.has(input)", token), true);
+  assert.equal(h.run("els.undoToasts.innerHTML.includes(input)", token), false);
+  h.run("switchSavedScenario(input);", id);
+  h.run("undoDeleteMovement(input);", token);
+  assert.equal(h.run("state.custom.movements[0].id"), "p");
+  assert.equal(h.run("getBaseProjection().movements.length"), 1);
+});
+
+test("SIM undo: switching away and back does not renew the original five-second deadline", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  const id = h.run('createSavedScenario("Caduca")');
+  const token = h.run('deleteMovement("p")');
+  const expiresAt = h.run("state.undoDeletions.get(input).expiresAt", token);
+  h.advanceTime(2000);
+  h.run('switchSavedScenario("base");');
+  h.advanceTime(2000);
+  h.run("switchSavedScenario(input);", id);
+  assert.equal(h.run("state.undoDeletions.get(input).expiresAt", token), expiresAt);
+  h.advanceTime(1000);
+  assert.throws(() => h.run("undoDeleteMovement(input)", token));
+  assert.equal(h.run("state.custom.movements.length"), 0);
+});
+
+test("SIM undo: applying a scenario invalidates recoveries belonging to the replaced Base", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1)), payment("other", h.day(2))]);
+  const id = h.run('createSavedScenario("Nueva Base")');
+  h.run('commitMovementEdit(["p"], { amount: 600 }, "custom"); switchSavedScenario("base");');
+  const token = h.run('deleteMovement("p")');
+  const previousBase = h.json("state.custom");
+  const backupId = h.run("applySavedScenarioToBase(input)", id);
+  assert.deepEqual(scenarioProjection(h, backupId), previousBase);
+  assert.equal(h.run("state.undoDeletions.has(input)", token), false);
+  assert.throws(() => h.run("undoDeleteMovement(input)", token));
+  assert.equal(h.run('state.custom.movements.find(m => m.id === "p").amount'), 600);
+});
+
+test("SIM reset: clearing the active scenario preserves Base, other saved data and their recoveries", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1))]);
+  const id = h.run('createSavedScenario("Solo limpiar aquí")');
+  h.run('switchSavedScenario("base");');
+  const baseToken = h.run('deleteMovement("p")');
+  const base = h.json("state.custom");
+  h.run("switchSavedScenario(input);", id);
+  const scenarioToken = h.run('deleteMovement("p")');
+  h.run("resetCustomProjection();");
+  assert.equal(h.run("state.activeScenarioId"), id);
+  assert.deepEqual(h.json("getBaseProjection()"), base);
+  assert.equal(h.run("state.custom.accounts.length"), 1);
+  assert.equal(h.run("state.custom.accounts[0].balance"), 0);
+  assert.deepEqual(h.json("state.custom.movements"), []);
+  assert.equal(h.run("state.undoDeletions.has(input)", baseToken), true);
+  assert.equal(h.run("state.undoDeletions.has(input)", scenarioToken), false);
+  h.run('switchSavedScenario("base");');
+  h.run("undoDeleteMovement(input);", baseToken);
+  assert.equal(h.run("state.custom.movements.length"), 1);
+});
+
+async function pasteImportReview(h, text) {
+  h.run('openImportDialog(); els.importSource.value = "paste"; els.importPaste.value = input;', text);
+  await h.run("nextImportStep();");
+  assert.equal(h.run("state.importDraft?.step"), "mapping", h.run("els.importError.textContent"));
+  await h.run("nextImportStep();");
+  assert.equal(h.run("state.importDraft?.step"), "review", h.run("els.importError.textContent"));
+}
+
+test("IMP controller: review initially selects valid rows without duplicates using the real text parser", async () => {
+  const h = harness();
+  seedTreasury(h, [payment("existing", h.day(1), { concept: "Pago existente", amount: 100, bankId: "bank-a", categoryId: "costos" })]);
+  const before = h.json("state.custom");
+  await pasteImportReview(h, [
+    "Fecha\tConcepto\tImporte\tTipo\tEstatus\tBanco\tCategoría",
+    `${h.day(2)}\tPago nuevo\t50.25\tPago\tConfirmado\t\t`,
+    `${h.day(1)}\tPago existente\t100\tPago\tConfirmado\tBanco Alfa\tCostos`,
+    `${h.day(3)}\tImporte inválido\ttexto\tPago\tConfirmado\t\t`,
+  ].join("\n"));
+  assert.deepEqual(h.json("[...state.importDraft.selectedRows]"), [2]);
+  assert.equal(h.run("state.importDraft.report.rows[0].errors.length"), 0);
+  assert.ok(h.run("state.importDraft.report.rows[1].duplicates.length") > 0);
+  assert.ok(h.run("state.importDraft.report.rows[2].errors.length") > 0);
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 0, "reading and reviewing must never persist");
+});
+
+test("IMP controller: changed data fingerprint rejects confirmation without discarding the review", async () => {
+  const h = harness();
+  seedTreasury(h, [payment("existing", h.day(1))]);
+  await pasteImportReview(h, `Fecha\tConcepto\tImporte\n${h.day(2)}\tNuevo\t20.25`);
+  const draft = h.run("state.importDraft");
+  h.run('commitMovementEdit(["existing"], { amount: 333 }, "custom");');
+  const before = h.json("state.custom");
+  const saved = h.saved();
+  const writes = h.storage.writes;
+  h.run("confirmImportMovements();");
+  assert.equal(h.run("state.importDraft"), draft);
+  assert.deepEqual(h.json("[...state.importDraft.selectedRows]"), [2]);
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.deepEqual(h.saved(), saved);
+  assert.equal(h.storage.writes, writes);
+  assert.notEqual(h.run("els.importError.textContent"), "");
+});
+
+test("IMP controller: storage failure retains the draft and selected rows for a successful retry", async () => {
+  const h = harness();
+  seedTreasury(h, []);
+  await pasteImportReview(h, `Fecha\tConcepto\tImporte\n${h.day(2)}\tNuevo\t20.25`);
+  const draft = h.run("state.importDraft");
+  const before = h.json("state.custom");
+  const report = h.json("state.importDraft.report");
+  h.storage.fail = true;
+  h.run("confirmImportMovements();");
+  assert.equal(h.run("state.importDraft"), draft);
+  assert.equal(h.run("state.importDraft.busy"), false);
+  assert.equal(h.run("state.importDraft.step"), "review");
+  assert.deepEqual(h.json("[...state.importDraft.selectedRows]"), [2]);
+  assert.deepEqual(h.json("state.importDraft.report"), report);
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 0);
+  assert.notEqual(h.run("els.importError.textContent"), "");
+  h.storage.fail = false;
+  h.run("confirmImportMovements();");
+  assert.equal(h.run("state.importDraft"), null);
+  assert.equal(h.run("state.custom.movements.length"), 1);
+  assert.equal(h.run("state.custom.movements[0].amount"), 20.25);
+  assert.equal(h.storage.writes, 1);
+});
+
+test("IMP controller: a cancelled asynchronous read cannot alter a newly opened draft or import records", async () => {
+  let finishRead;
+  let readSignal;
+  let markReadStarted;
+  const readStarted = new Promise((resolve) => { markReadStarted = resolve; });
+  // Control only completion timing of external file reading. All application
+  // handlers and rendering functions execute normally, with no render stubs.
+  const importer = { ...importModule, readXlsx(_bytes, { signal }) {
+    readSignal = signal;
+    return new Promise((resolve) => { finishRead = resolve; markReadStarted(); });
+  } };
+  const h = harness(undefined, { importer });
+  seedTreasury(h, []);
+  h.run("openImportDialog();");
+  h.elements.get("#importFile").files = [{ name: "synthetic.xlsx", size: 8, arrayBuffer: async () => new Uint8Array(8).buffer }];
+  const pending = h.run("nextImportStep();");
+  await Promise.race([readStarted, pending]);
+  assert.equal(typeof finishRead, "function", h.run("els.importError.textContent"));
+  h.run('cancelImportDraft(); openImportDialog(); els.importError.textContent = "Borrador nuevo";');
+  const freshDraft = h.run("state.importDraft");
+  const uiBefore = h.json("[els.importSheet.innerHTML, els.importMapping.innerHTML, els.importFileInfo.textContent, els.importError.textContent]");
+  assert.equal(readSignal.aborted, true);
+  const lateResult = importModule.parseText(`Fecha\tConcepto\tImporte\n${h.day(1)}\tResultado antiguo\t100`, { delimiter: "auto" });
+  finishRead(lateResult);
+  await pending;
+  assert.equal(h.run("state.importDraft"), freshDraft);
+  assert.equal(h.run("state.importDraft.step"), "source");
+  assert.equal(h.run("state.importDraft.busy"), false);
+  assert.deepEqual(h.json("[els.importSheet.innerHTML, els.importMapping.innerHTML, els.importFileInfo.textContent, els.importError.textContent]"), uiBefore);
+  assert.deepEqual(h.json("state.custom.movements"), []);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("IMP integration: large exact cents accepted in preview can commit while third decimals remain invalid", () => {
+  const h = harness();
+  seedTreasury(h, []);
+  const validAmounts = [268435456.03, 536870912.05, 10000000000.03];
+  const invalidAmounts = [1.001, 12.345, 268435456.031, 536870912.051, 10000000000.031];
+  const text = ["Fecha\tConcepto\tImporte", ...[...validAmounts, ...invalidAmounts]
+    .map((amount, index) => `${h.day(1)}\tImporte ${index}\t${amount}`)].join("\n");
+  const sheet = importModule.parseText(text, { delimiter: "auto" }).sheets[0];
+  const report = importModule.preview(sheet, {}, {
+    accounts: h.json("state.custom.accounts"), categories: h.json("CATEGORY_OPTIONS"),
+    existingMovements: [], todayISO: h.day(), minDate: h.day(),
+  });
+  assert.equal(report.summary.valid, validAmounts.length);
+  assert.equal(report.summary.invalid, invalidAmounts.length);
+  assert.ok(report.rows.slice(validAmounts.length).every((row) =>
+    row.errors.some((error) => error.code === "INVALID_AMOUNT")));
+
+  const added = commitReport(h, report, report.rows.slice(0, validAmounts.length).map((row) => row.rowNumber));
+  assert.deepEqual(added.map((record) => record.amount), validAmounts);
+  assert.deepEqual(h.saved().movements.map((record) => record.amount), validAmounts);
+  const before = h.json("state.custom");
+  const writes = h.storage.writes;
+  for (const amount of invalidAmounts) {
+    assert.throws(() => commitReport(h, {
+      rows: [reportRow(2, payment("untrusted", h.day(1), { amount }))],
+    }, [2]), /importe|decimales/i);
+  }
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, writes);
 });
 

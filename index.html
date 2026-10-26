@@ -100,6 +100,53 @@
             </p>
           </div>
 
+          <section class="saved-scenarios-panel" id="savedScenariosPanel" aria-labelledby="savedScenariosTitle">
+            <div class="saved-scenarios-heading">
+              <div>
+                <h3 id="savedScenariosTitle">Escenarios guardados</h3>
+                <p>Compara alternativas con bancos y movimientos independientes. Puedes guardar hasta 10 escenarios.</p>
+              </div>
+            </div>
+            <div class="scenario-toolbar">
+              <div class="field-group">
+                <label for="scenarioSelect">Escenario activo</label>
+                <select id="scenarioSelect">
+                  <option value="base">Base personal</option>
+                </select>
+              </div>
+              <button class="button button-secondary" id="createScenarioButton" type="button">Crear escenario</button>
+              <details class="scenario-actions" id="scenarioActions">
+                <summary>Más opciones</summary>
+                <div class="scenario-action-buttons">
+                  <button class="button button-secondary" id="duplicateScenarioButton" type="button">Duplicar escenario</button>
+                  <button class="button button-secondary" id="renameScenarioButton" type="button" disabled>Renombrar</button>
+                  <button class="button button-secondary" id="applyScenarioButton" type="button" disabled>Usar este escenario como Base</button>
+                  <button class="button button-secondary" id="returnToBaseButton" type="button" disabled>Volver a Base personal</button>
+                  <button class="button button-danger" id="deleteScenarioButton" type="button" disabled>Eliminar escenario</button>
+                </div>
+              </details>
+            </div>
+            <p class="movement-feedback" id="scenarioFeedback" role="status" aria-live="polite"></p>
+            <details class="scenario-comparison" id="scenarioComparison">
+              <summary>Comparar escenarios</summary>
+              <p class="table-help" id="scenarioComparisonHelp">Base personal y los escenarios guardados se comparan con el mismo horizonte y la misma regla de movimientos por confirmar.</p>
+              <div class="table-wrap">
+                <table class="scenario-comparison-table" role="table" aria-describedby="scenarioComparisonHelp">
+                  <caption class="sr-only">Comparación de escenarios contra Base personal</caption>
+                  <thead role="rowgroup">
+                    <tr role="row">
+                      <th scope="col">Escenario</th>
+                      <th scope="col">Saldo mínimo y fecha</th>
+                      <th scope="col">Saldo final</th>
+                      <th scope="col">Primer faltante</th>
+                    </tr>
+                  </thead>
+                  <tbody id="scenarioComparisonBody" role="rowgroup"></tbody>
+                </table>
+              </div>
+            </details>
+          </section>
+
           <div class="builder-grid">
             <article class="builder-card">
               <div class="builder-card-heading">
@@ -132,6 +179,11 @@
                   <h3>Cobros, pagos y traspasos</h3>
                   <p>Captura los movimientos que impactarán tu liquidez.</p>
                 </div>
+              </div>
+
+              <div class="capture-import-toolbar">
+                <button class="button button-secondary" id="openImportButton" type="button">Importar movimientos</button>
+                <span>Desde Excel o una tabla copiada.</span>
               </div>
 
               <form class="movement-form" id="movementForm">
@@ -527,7 +579,7 @@
         <p class="section-kicker">ACTUALIZAR MOVIMIENTOS</p>
         <h2 id="movementEditTitle">Editar movimiento</h2>
         <p class="movement-edit-description" id="movementEditDescription"></p>
-        <p class="movement-edit-help">Marca los campos que quieres cambiar. Los demás conservarán su valor.</p>
+        <p class="movement-edit-help" id="movementEditHelp">Marca los campos que quieres cambiar. Los demás conservarán su valor.</p>
 
         <div class="edit-individual-fields" id="editIndividualFields" hidden>
           <div class="field-group">
@@ -618,10 +670,203 @@
       </div>
     </dialog>
 
+    <dialog class="movement-edit-dialog" id="scenarioNameDialog" aria-labelledby="scenarioNameTitle">
+      <form id="scenarioNameForm" novalidate>
+        <p class="section-kicker">ESCENARIOS</p>
+        <h2 id="scenarioNameTitle">Crear escenario</h2>
+        <div class="scenario-name-fields">
+          <div class="field-group">
+            <label for="scenarioNameInput">Nombre del escenario</label>
+            <input id="scenarioNameInput" type="text" maxlength="60" required autocomplete="off" />
+          </div>
+          <div class="field-group" id="scenarioSourceField">
+            <label for="scenarioSource">Crear a partir de</label>
+            <select id="scenarioSource">
+              <option value="base">Desde Base personal</option>
+              <option value="current">Desde el escenario actual</option>
+            </select>
+          </div>
+        </div>
+        <p class="movement-edit-error" id="scenarioNameError" role="alert"></p>
+        <div class="movement-edit-actions">
+          <button class="button button-secondary" id="cancelScenarioName" type="button">Cancelar</button>
+          <button class="button button-primary" id="saveScenarioName" type="submit">Crear escenario</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="movement-edit-dialog" id="scenarioDeleteDialog" aria-labelledby="scenarioDeleteTitle" aria-describedby="scenarioDeleteDescription">
+      <p class="section-kicker">ESCENARIOS</p>
+      <h2 id="scenarioDeleteTitle">Eliminar escenario</h2>
+      <p class="movement-edit-description" id="scenarioDeleteDescription"></p>
+      <div class="scenario-impact" id="scenarioDeleteImpact"></div>
+      <p class="movement-edit-error" id="scenarioDeleteError" role="alert"></p>
+      <div class="movement-edit-actions">
+        <button class="button button-secondary" id="cancelScenarioDelete" type="button">Cancelar</button>
+        <button class="button button-danger" id="confirmScenarioDelete" type="button">Eliminar escenario</button>
+      </div>
+    </dialog>
+
+    <dialog class="movement-edit-dialog" id="scenarioApplyDialog" aria-labelledby="scenarioApplyTitle" aria-describedby="scenarioApplyDescription">
+      <p class="section-kicker">ESCENARIOS</p>
+      <h2 id="scenarioApplyTitle">Usar este escenario como Base</h2>
+      <p class="movement-edit-description" id="scenarioApplyDescription">Antes de reemplazar Base personal, se guardará automáticamente una copia de su estado actual.</p>
+      <div class="scenario-impact" id="scenarioApplyImpact"></div>
+      <p class="movement-edit-error" id="scenarioApplyError" role="alert"></p>
+      <div class="movement-edit-actions">
+        <button class="button button-secondary" id="cancelScenarioApply" type="button">Cancelar</button>
+        <button class="button button-primary" id="confirmScenarioApply" type="button">Usar como Base</button>
+      </div>
+    </dialog>
+
+    <dialog class="movement-edit-dialog movement-import-dialog" id="movementImportDialog" aria-labelledby="movementImportTitle">
+      <div class="import-dialog-heading">
+        <p class="section-kicker">CARGA DE MOVIMIENTOS</p>
+        <h2 id="movementImportTitle">Importar movimientos</h2>
+        <p class="import-target">Destino: <strong id="importTargetScenario">Base personal</strong></p>
+        <ol class="import-steps" id="importSteps" aria-label="Pasos de importación">
+          <li data-import-step="source" aria-current="step"><span aria-hidden="true">1</span> Origen</li>
+          <li data-import-step="mapping"><span aria-hidden="true">2</span> Columnas</li>
+          <li data-import-step="review"><span aria-hidden="true">3</span> Revisión</li>
+        </ol>
+      </div>
+
+      <div class="import-dialog-body">
+        <section class="import-step" id="importSourceStep" aria-labelledby="importSourceTitle">
+          <h3 id="importSourceTitle">Elige el origen de los datos</h3>
+          <p class="import-help">Los movimientos se guardarán cuando revises las filas y confirmes la importación.</p>
+          <div class="field-group import-source-choice">
+            <label for="importSource">Origen</label>
+            <select id="importSource">
+              <option value="file">Archivo Excel, CSV o TSV</option>
+              <option value="paste">Pegar tabla</option>
+            </select>
+          </div>
+          <div class="import-source-panel" id="importFilePanel">
+            <label class="import-field-label" for="importFile">Archivo Excel (.xlsx), CSV o TSV</label>
+            <input id="importFile" type="file" accept=".xlsx,.csv,.tsv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/tab-separated-values" aria-describedby="importFileHelp" />
+            <p class="import-help" id="importFileHelp">Hasta 10 MiB, 5,000 movimientos y 50 columnas. Los archivos CSV y TSV deben estar en UTF-8.</p>
+            <p class="import-file-info" id="importFileInfo" role="status" aria-live="polite"></p>
+          </div>
+          <div class="import-source-panel" id="importPastePanel" hidden>
+            <label class="import-field-label" for="importPaste">Tabla copiada</label>
+            <textarea id="importPaste" rows="7" spellcheck="false" aria-describedby="importPasteHelp" placeholder="Pega aquí las celdas copiadas de Excel."></textarea>
+            <p class="import-help" id="importPasteHelp">Puedes incluir los encabezados. En el siguiente paso elegirás las columnas de cada campo.</p>
+          </div>
+        </section>
+
+        <section class="import-step" id="importMappingStep" aria-labelledby="importMappingTitle" hidden>
+          <h3 id="importMappingTitle">Relaciona las columnas</h3>
+          <div class="import-settings-grid">
+            <div class="field-group" id="importSheetField">
+              <label for="importSheet">Hoja</label>
+              <select id="importSheet"><option value="">Elige una hoja</option></select>
+            </div>
+            <div class="field-group">
+              <label for="importHeaderRow">Fila de encabezados</label>
+              <input id="importHeaderRow" type="number" min="0" step="1" value="1" aria-describedby="importHeaderHelp" />
+              <p class="import-help" id="importHeaderHelp">Usa 0 si la tabla no tiene encabezados.</p>
+            </div>
+            <div class="field-group">
+              <label for="importDateOrder">Orden de la fecha</label>
+              <select id="importDateOrder">
+                <option value="DMY">Día / mes / año</option>
+                <option value="MDY">Mes / día / año</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="importNumberFormat">Formato del importe</label>
+              <select id="importNumberFormat">
+                <option value="es-MX">1,234.56</option>
+                <option value="es-ES">1.234,56</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="importDefaultType">Tipo predeterminado</label>
+              <select id="importDefaultType">
+                <option value="outflow">Pago</option>
+                <option value="inflow">Cobro</option>
+                <option value="transfer">Traspaso</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="importDefaultStatus">Estatus predeterminado</label>
+              <select id="importDefaultStatus">
+                <option value="confirmed">Confirmado</option>
+                <option value="pending">Por confirmar</option>
+              </select>
+            </div>
+          </div>
+          <label class="import-checkbox-label" for="importAllowPast">
+            <input class="movement-checkbox" id="importAllowPast" type="checkbox" />
+            <span>Permitir fechas anteriores a hoy</span>
+          </label>
+          <div class="import-mapping-grid" id="importMapping"></div>
+          <p class="movement-edit-error" id="importMappingError" role="alert"></p>
+          <h4 class="import-preview-title">Vista previa del origen</h4>
+          <div class="import-source-preview" id="importSourcePreview" tabindex="0" role="region" aria-label="Vista previa de las filas del origen"></div>
+        </section>
+
+        <section class="import-step" id="importReviewStep" aria-labelledby="importReviewTitle" hidden>
+          <h3 id="importReviewTitle">Revisa los movimientos a importar</h3>
+          <div class="import-review-summary" id="importReviewSummary" role="status" aria-live="polite"></div>
+          <p class="import-help" id="importReviewHelp">Revisa los errores y los posibles duplicados antes de elegir las filas. Los posibles duplicados aparecen desmarcados.</p>
+          <div class="import-review-toolbar">
+            <div class="field-group">
+              <label for="importReviewFilter">Mostrar filas</label>
+              <select id="importReviewFilter">
+                <option value="all">Todas</option>
+                <option value="valid">Válidas</option>
+                <option value="error">Con errores</option>
+                <option value="duplicate">Posibles duplicados</option>
+              </select>
+            </div>
+            <div class="import-review-actions">
+              <button class="button button-secondary" id="importSelectValid" type="button">Seleccionar válidas</button>
+              <button class="button button-secondary" id="importClearSelection" type="button">Quitar selección</button>
+            </div>
+          </div>
+          <div class="import-table-wrap" tabindex="0" role="region" aria-label="Filas de la importación; desplaza para revisar">
+            <table class="import-review-table" role="table" aria-describedby="importReviewHelp">
+              <caption class="sr-only">Filas revisadas para importar</caption>
+              <thead role="rowgroup">
+                <tr role="row">
+                  <th scope="col"><span class="sr-only">Seleccionar</span></th>
+                  <th scope="col">Fila</th>
+                  <th scope="col">Movimiento</th>
+                  <th scope="col">Fecha</th>
+                  <th scope="col" class="align-right">Importe</th>
+                  <th scope="col">Revisión</th>
+                </tr>
+              </thead>
+              <tbody id="importReviewBody" role="rowgroup"></tbody>
+            </table>
+          </div>
+          <nav class="import-review-pagination" id="importReviewPage" aria-label="Páginas de revisión">
+            <button class="button button-secondary" id="importReviewPrev" type="button" disabled>Anterior</button>
+            <span id="importReviewPageLabel" aria-live="polite">Página 1 de 1</span>
+            <button class="button button-secondary" id="importReviewNext" type="button" disabled>Siguiente</button>
+          </nav>
+        </section>
+
+        <p class="movement-edit-error" id="importError" role="alert" tabindex="-1"></p>
+      </div>
+
+      <div class="import-dialog-actions">
+        <button class="button button-secondary" id="cancelImport" type="button">Cancelar</button>
+        <div class="import-navigation-actions">
+          <button class="button button-secondary" id="backImport" type="button" hidden>Volver</button>
+          <button class="button button-primary" id="nextImport" type="button">Continuar</button>
+          <button class="button button-primary" id="confirmImport" type="button" disabled hidden>Importar seleccionados</button>
+        </div>
+      </div>
+    </dialog>
+
     <div class="undo-toasts" id="undoToasts" role="region" aria-label="Movimientos eliminados" aria-live="polite"></div>
 
     <div class="sr-only" id="liveRegion" aria-live="polite"></div>
     <script src="excel-export.js"></script>
+    <script src="treasury-import.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

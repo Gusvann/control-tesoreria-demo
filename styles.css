@@ -2276,4 +2276,721 @@ body {
   }
 }
 
+/* Escenarios guardados e importación con revisión */
+.saved-scenarios-panel {
+  min-width: 0;
+  margin-bottom: 22px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #f8faff;
+}
+
+.saved-scenarios-heading h3 {
+  margin: 0;
+  font-family: "Sora", sans-serif;
+  font-size: 1.05rem;
+}
+
+.saved-scenarios-heading p {
+  margin: 6px 0 18px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.scenario-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.scenario-toolbar > .field-group {
+  max-width: 520px;
+}
+
+.scenario-actions {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.scenario-actions > summary,
+.scenario-comparison > summary {
+  width: fit-content;
+  max-width: 100%;
+  padding: 8px 0;
+  color: var(--blue-deep);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.scenario-actions > summary:focus-visible,
+.scenario-comparison > summary:focus-visible {
+  outline: 3px solid rgba(36, 99, 219, 0.3);
+  outline-offset: 3px;
+  border-radius: 5px;
+}
+
+.scenario-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white;
+}
+
+.scenario-action-buttons .button {
+  min-height: 40px;
+  max-width: 100%;
+  padding: 8px 12px;
+  font-size: 0.78rem;
+  white-space: normal;
+}
+
+.scenario-comparison {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.scenario-comparison .table-help {
+  margin: 4px 0 12px;
+}
+
+.scenario-comparison-table th,
+.scenario-comparison-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.scenario-comparison-table td {
+  vertical-align: top;
+}
+
+.scenario-comparison-table td small,
+.scenario-delta {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.73rem;
+  line-height: 1.5;
+}
+
+.scenario-comparison-table tr.is-active {
+  background: var(--blue-soft);
+}
+
+.scenario-name-fields {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.scenario-impact:not(:empty) {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--canvas);
+  font-size: 0.83rem;
+  overflow-wrap: anywhere;
+}
+
+.scenario-impact p {
+  margin: 0 0 8px;
+}
+
+.scenario-impact p:last-child {
+  margin-bottom: 0;
+}
+
+.scenario-impact dl {
+  margin: 0;
+}
+
+.scenario-impact dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 0;
+}
+
+.scenario-impact dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 700;
+}
+
+.capture-import-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.capture-import-toolbar .button {
+  font-size: 0.8rem;
+}
+
+.capture-import-toolbar > span {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.movement-duplicate-button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: white;
+  color: var(--blue-deep);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.movement-duplicate-button:hover {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.movement-import-dialog {
+  width: min(1040px, calc(100% - 32px));
+  padding: 0;
+  overflow: hidden;
+}
+
+.movement-import-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.import-dialog-heading {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 24px 26px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.import-target {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.81rem;
+  overflow-wrap: anywhere;
+}
+
+.import-target strong {
+  color: var(--ink);
+}
+
+.import-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.import-steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--canvas);
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.import-steps li > span {
+  flex: 0 0 auto;
+  width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: white;
+  font-size: 0.72rem;
+}
+
+.import-steps li[aria-current="step"] {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+  color: var(--blue-deep);
+  font-weight: 700;
+}
+
+.import-dialog-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 22px 26px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.import-step {
+  min-width: 0;
+}
+
+.import-step h3 {
+  margin: 0 0 10px;
+  font-family: "Sora", sans-serif;
+  font-size: 1.03rem;
+}
+
+.import-help {
+  margin: 7px 0 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.import-source-choice {
+  max-width: 340px;
+  margin: 20px 0 0;
+}
+
+.import-source-panel {
+  min-width: 0;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--canvas);
+}
+
+.import-field-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.import-source-panel input[type="file"] {
+  padding: 10px;
+  font-size: 0.8rem;
+}
+
+.import-source-panel input[type="file"]::file-selector-button {
+  margin-right: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--blue-soft);
+  color: var(--blue-deep);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.import-file-info {
+  margin: 10px 0 0;
+  color: var(--blue-deep);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.import-source-panel textarea {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 150px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: white;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  tab-size: 4;
+  resize: vertical;
+}
+
+.import-source-panel textarea:focus-visible {
+  outline: 3px solid rgba(36, 99, 219, 0.22);
+  outline-offset: 3px;
+}
+
+.import-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.import-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.import-mapping-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.import-preview-title {
+  margin: 20px 0 10px;
+  font-size: 0.82rem;
+}
+
+.import-source-preview {
+  max-width: 100%;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.import-source-preview:empty,
+.import-file-info:empty {
+  display: none;
+}
+
+.import-source-preview table {
+  min-width: 560px;
+}
+
+.import-source-preview th,
+.import-source-preview td {
+  padding: 9px 10px;
+  font-size: 0.73rem;
+}
+
+.import-review-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 14px 0;
+  padding: 13px 14px;
+  border: 1px solid #c9dafa;
+  border-radius: 10px;
+  background: var(--blue-soft);
+  color: var(--blue-deep);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.import-review-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 18px 0 14px;
+}
+
+.import-review-toolbar > .field-group {
+  flex: 0 1 260px;
+}
+
+.import-review-actions,
+.import-navigation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.import-review-actions .button,
+.import-review-pagination .button {
+  min-height: 40px;
+  font-size: 0.78rem;
+}
+
+.import-table-wrap {
+  min-width: 0;
+  max-width: 100%;
+  max-height: 430px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.import-review-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--canvas);
+}
+
+.import-review-table td {
+  vertical-align: top;
+  font-size: 0.79rem;
+}
+
+.import-review-table td:nth-child(3),
+.import-review-table td:last-child {
+  min-width: 170px;
+  max-width: 320px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.import-review-table td small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.import-review-table .is-selected {
+  background: var(--blue-soft);
+}
+
+.import-review-pagination {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  font-size: 0.77rem;
+  text-align: center;
+}
+
+.import-dialog-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 26px;
+  border-top: 1px solid var(--line);
+  background: white;
+}
+
+.import-dialog-actions .button {
+  min-width: 0;
+  padding-top: 9px;
+  padding-bottom: 9px;
+  font-size: 0.82rem;
+  white-space: normal;
+}
+
+@media (max-width: 860px) {
+  .import-settings-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .saved-scenarios-panel {
+    padding: 15px;
+  }
+
+  .scenario-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .scenario-toolbar > .field-group {
+    max-width: none;
+  }
+
+  .scenario-action-buttons .button {
+    flex: 1 1 180px;
+  }
+
+  .capture-import-toolbar .button {
+    width: 100%;
+  }
+
+  .movement-import-dialog {
+    width: calc(100% - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+
+  .import-dialog-heading {
+    padding: 18px 16px 14px;
+  }
+
+  .import-dialog-body {
+    padding: 18px 16px;
+  }
+
+  .import-dialog-actions {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px 16px;
+  }
+
+  .import-navigation-actions > .button {
+    flex: 1;
+  }
+
+  .import-steps li {
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 4px;
+    font-size: 0.72rem;
+    text-align: center;
+  }
+
+  .import-settings-grid,
+  .import-mapping-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .import-review-toolbar > .field-group,
+  .import-review-actions {
+    flex: 1 1 100%;
+  }
+
+  .import-review-actions .button {
+    flex: 1;
+    padding: 8px 10px;
+  }
+
+  .import-review-pagination .button {
+    padding: 0 10px;
+  }
+
+  .import-table-wrap {
+    max-height: 420px;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .scenario-comparison-table,
+  .import-review-table {
+    display: block;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .scenario-comparison-table thead,
+  .import-review-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .scenario-comparison-table tbody,
+  .import-review-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .scenario-comparison-table tbody tr,
+  .import-review-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+    padding: 13px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: white;
+  }
+
+  .scenario-comparison-table tbody td,
+  .import-review-table tbody td {
+    display: block;
+    min-width: 0;
+    max-width: none;
+    padding: 5px 0;
+    border: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .scenario-comparison-table tbody td::before,
+  .import-review-table tbody td::before {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--muted);
+    font-family: "Public Sans", sans-serif;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-align: left;
+  }
+
+  .scenario-comparison-table td:nth-child(2)::before {
+    content: "Saldo mínimo y fecha";
+  }
+
+  .scenario-comparison-table td:nth-child(3)::before {
+    content: "Saldo final";
+  }
+
+  .scenario-comparison-table td:nth-child(4)::before {
+    content: "Primer faltante";
+  }
+
+  .scenario-comparison-table td:first-child {
+    font-weight: 700;
+    padding-bottom: 9px;
+  }
+
+  .import-review-table tbody tr {
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: 0 8px;
+  }
+
+  .import-review-table tbody td {
+    grid-column: 1 / -1;
+  }
+
+  .import-review-table tbody td:first-child:not([colspan]) {
+    grid-column: 1;
+    grid-row: 1;
+    padding: 0;
+  }
+
+  .import-review-table tbody td:nth-child(3) {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0 0 8px;
+  }
+
+  .import-review-table td:nth-child(2)::before {
+    content: "Fila";
+  }
+
+  .import-review-table td:nth-child(4)::before {
+    content: "Fecha";
+  }
+
+  .import-review-table td:nth-child(5)::before {
+    content: "Importe";
+  }
+
+  .import-review-table td:nth-child(6)::before {
+    content: "Revisión";
+  }
+
+  .import-review-table td:nth-child(5) {
+    text-align: left;
+  }
+
+  .import-review-table td[colspan]::before,
+  .scenario-comparison-table td[colspan]::before {
+    content: none;
+  }
+}
+
 
