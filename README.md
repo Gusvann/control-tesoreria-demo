@@ -40,7 +40,7 @@ El CTA **Crear mi proyección** cambia a un escenario personal que comienza en c
 
 ## Criterios del proyecto
 
-- La fecha inicial siempre corresponde al día en que se abre la aplicación.
+- La fecha inicial corresponde al día actual y se actualiza al cruzar la medianoche o al volver a la pestaña, sin borrar una captura en curso.
 - La captura y la duplicación no admiten fechas anteriores al día actual. La importación permite históricos únicamente al activar esa opción; no entran en la proyección que comienza hoy.
 - El saldo inicial total se calcula a partir de la suma de los saldos bancarios.
 - La proyección es completamente client-side.
@@ -116,6 +116,8 @@ La descarga genera un archivo `.xlsx` con una fila por movimiento y campos de fe
 
 Excel es un reporte de movimientos. El respaldo y la restauración de toda la proyección no forman parte de esta función.
 
+Las columnas adicionales **ID banco**, **ID banco origen** e **ID banco destino** se exportan como texto. El importador da prioridad a esos identificadores para distinguir bancos con nombres iguales; no los cambies si pretendes reimportar el archivo al mismo escenario. Los pagos sin banco llevan vacíos el nombre y el identificador. Los Excel anteriores a esta ampliación siguen siendo legibles por nombre, con aviso de ambigüedad cuando corresponda.
+
 ### Importar Excel o pegar una tabla
 
 En la proyección personal, usa **Importar movimientos**. La carga tiene tres pasos y añade registros al escenario activo:
@@ -173,6 +175,8 @@ node tests/excel-export.test.cjs
 node tests/treasury-import.test.cjs
 node tests/accounting.test.cjs
 ```
+
+El repositorio dispone de [verificación automática de Node.js](.github/workflows/treasury-tests.yml) en los cambios de la rama principal, ramas de corrección y propuestas de integración. Esta verificación **no configura por sí misma reglas de protección de `main` ni bloquea el despliegue automático de GitHub Pages**; se requiere habilitar verificaciones obligatorias en la configuración del repositorio para impedir futuras publicaciones sin aprobarlas.
 
 No se necesitan dependencias para las pruebas. Consulta [la especificación](docs/movement-editing-spec.md) y [la evidencia de verificación](docs/movement-editing-verification.md) para conocer el alcance y los límites de las comprobaciones.
 
