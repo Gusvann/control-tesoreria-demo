@@ -2092,9 +2092,13 @@ function deleteMovement(id) {
   const movement = { ...matches[0] };
   const originalRows = state.custom.movements;
   const token = createId("undo");
+  // Share a canonical order across overlapping five-second undo windows.
+  // Adjacent IDs alone are insufficient when removals happen in reverse order.
+  const pending = [...state.undoDeletions.values()].find((entry) => entry.scenarioId === state.activeScenarioId);
+  const orderSnapshot = pending?.orderSnapshot ?? originalRows.map((entry) => entry.id);
+  if (!orderSnapshot.includes(id)) orderSnapshot.push(id);
   persistCustomCandidate({ ...state.custom, movements: originalRows.filter((entry) => entry.id !== id) });
-  const entry = { movement, index, beforeId: originalRows[index - 1]?.id ?? null,
-    afterId: originalRows[index + 1]?.id ?? null,
+  const entry = { movement, index, orderSnapshot,
     scenarioId: state.activeScenarioId, expiresAt: Date.now() + 5000 };
   state.undoDeletions.set(token, entry);
   entry.timer = setTimeout(() => expireUndoDeletion(token), 5000);
@@ -2142,9 +2146,16 @@ function undoDeleteMovement(token, now = Date.now()) {
   }
   if (entry.movement.type === "transfer") validateTransfer(entry.movement, state.custom.accounts);
   const movements = [...state.custom.movements];
-  const before = entry.beforeId ? movements.findIndex((item) => item.id === entry.beforeId) : -1;
-  const after = entry.afterId ? movements.findIndex((item) => item.id === entry.afterId) : -1;
-  const insertion = after >= 0 ? after : before >= 0 ? before + 1 : Math.min(entry.index, movements.length);
+  const order = entry.orderSnapshot ?? [];
+  const restoredPosition = order.indexOf(entry.movement.id);
+  let insertion = Math.min(entry.index, movements.length);
+  if (restoredPosition >= 0) {
+    const positions = new Map(movements.map((item, index) => [item.id, index]));
+    const next = order.slice(restoredPosition + 1).find((id) => positions.has(id));
+    const previous = [...order.slice(0, restoredPosition)].reverse().find((id) => positions.has(id));
+    if (next !== undefined) insertion = positions.get(next);
+    else if (previous !== undefined) insertion = positions.get(previous) + 1;
+  }
   movements.splice(insertion, 0, entry.movement);
   persistCustomCandidate({ ...state.custom, movements });
   expireUndoDeletion(token);
