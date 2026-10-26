@@ -18,7 +18,7 @@
     cellCharacters: 32767,
     timeoutMs: 15000,
   });
-  const FIELDS = ["date", "concept", "type", "status", "amount", "bank", "category", "fromBank", "toBank", "sourceId"];
+  const FIELDS = ["date", "concept", "type", "status", "amount", "bank", "category", "fromBank", "toBank", "sourceId", "bankId", "fromBankId", "toBankId"];
   const ALIASES = {
     date: ["fecha", "fecha de pago", "fecha pago", "fecha movimiento", "fecha del movimiento", "date"],
     concept: ["concepto", "descripcion", "descripcion del movimiento", "detalle", "concept", "description"],
@@ -30,6 +30,9 @@
     fromBank: ["banco origen", "cuenta origen", "cuenta de origen", "origen", "from bank", "frombank"],
     toBank: ["banco destino", "cuenta destino", "cuenta de destino", "destino", "to bank", "tobank"],
     sourceId: ["id", "id movimiento", "identificador", "sourceid"],
+    bankId: ["id banco", "id del banco", "bank id", "bankid"],
+    fromBankId: ["id banco origen", "id cuenta origen", "from bank id", "frombankid"],
+    toBankId: ["id banco destino", "id cuenta destino", "to bank id", "tobankid"],
   };
   const TYPE_NAMES = new Map([
     ["cobro", "inflow"], ["ingreso", "inflow"], ["entrada", "inflow"], ["inflow", "inflow"],
@@ -568,6 +571,18 @@
     return "";
   }
 
+  function referenceWithExplicitId(nameValue, idValue, idColumnPresent, items, field, errors, warnings, optional) {
+    if (idColumnPresent && !blank(idValue)) {
+      const id = String(idValue).trim();
+      const matches = items.filter((item) => item.id === id);
+      if (matches.length === 1) return id;
+      errors.push(issue("UNKNOWN_BANK_ID", field, `El identificador de banco «${id}» no existe de forma única en este escenario.`));
+      return "";
+    }
+    if (idColumnPresent && optional && ["sin banco", "sin banco asignado"].includes(normalize(nameValue))) return "";
+    return referenceValue(nameValue, items, field, errors, warnings, optional);
+  }
+
   function fingerprint(movement) {
     const amount = amountValue(movement.amount, "es-MX");
     if (!movement.date || !movement.type || !movement.concept || amount == null) return null;
@@ -644,16 +659,16 @@
       if (!status) errors.push(issue("INVALID_STATUS", "status", "El estatus debe ser Confirmado o Por confirmar."));
       const movement = { date, concept, type, status, amount };
       if (type === "outflow") {
-        const bankId = referenceValue(value("bank"), accounts, "bank", errors, warnings, true);
+        const bankId = referenceWithExplicitId(value("bank"), value("bankId"), mapping.bankId != null, accounts, "bank", errors, warnings, true);
         const categoryId = referenceValue(value("category"), categories, "category", errors, warnings, true);
         if (bankId) movement.bankId = bankId;
         if (categoryId) movement.categoryId = categoryId;
       } else if (type === "transfer") {
-        movement.fromBankId = referenceValue(value("fromBank"), accounts, "fromBank", errors, warnings, false);
-        movement.toBankId = referenceValue(value("toBank"), accounts, "toBank", errors, warnings, false);
+        movement.fromBankId = referenceWithExplicitId(value("fromBank"), value("fromBankId"), mapping.fromBankId != null, accounts, "fromBank", errors, warnings, false);
+        movement.toBankId = referenceWithExplicitId(value("toBank"), value("toBankId"), mapping.toBankId != null, accounts, "toBank", errors, warnings, false);
         if (movement.fromBankId && movement.fromBankId === movement.toBankId) errors.push(issue("SAME_BANK", "toBank", "La cuenta de destino debe ser distinta de la de origen."));
       }
-      const irrelevant = type === "outflow" ? ["fromBank", "toBank"] : type === "transfer" ? ["bank", "category"] : type === "inflow" ? ["bank", "category", "fromBank", "toBank"] : [];
+      const irrelevant = type === "outflow" ? ["fromBank", "toBank", "fromBankId", "toBankId"] : type === "transfer" ? ["bank", "bankId", "category"] : type === "inflow" ? ["bank", "bankId", "category", "fromBank", "toBank", "fromBankId", "toBankId"] : [];
       irrelevant.forEach((field) => {
         if (!blank(value(field))) warnings.push(issue("FIELD_NOT_APPLICABLE", field, "Este campo no corresponde al tipo de movimiento y no se importará."));
       });
