@@ -347,9 +347,15 @@ function setMoneyInputError(input, message = "") {
 }
 
 function focusMoneyInput(input) {
-  // Do not rewrite a focused field: focus/selection/paste may be one native action.
-  // The formatter runs only after editing has finished.
+  // A formatted zero/dash or grouped number is a display value, not an
+  // editable draft. Convert it to plain decimal text and select its contents
+  // so typing starts a new amount instead of appending digits to punctuation.
+  const original = input.value;
+  const value = TreasuryAccounting.parseInput(original);
   setMoneyInputError(input);
+  if (!Number.isFinite(value) || !original.trim()) return;
+  input.value = TreasuryAccounting.editingValue(value);
+  if (typeof input.select === "function") input.select();
 }
 
 function commitBankBalance(bankId, rawValue, expectedScenarioId = state.activeScenarioId) {
@@ -366,6 +372,8 @@ function commitBankBalance(bankId, rawValue, expectedScenarioId = state.activeSc
 }
 
 function finishMoneyInput(input) {
+  // A removed bank row may still dispatch focusout during an unrelated render.
+  if (input.isConnected === false) return;
   const isBalance = input.dataset.moneyInput === "balance";
   try {
     if (!input.value.trim() && !isBalance) { setMoneyInputError(input); return; }
@@ -373,14 +381,22 @@ function finishMoneyInput(input) {
       const row = input.closest("[data-bank-id]");
       const account = state.custom.accounts.find((item) => item.id === row?.dataset.bankId);
       if (!account || input.dataset.scenarioId !== state.activeScenarioId || state.mode !== "custom") throw new Error("El banco o el escenario cambió. Revisa el saldo en el destino actual.");
+      // Erasing a bank field cancels that edit. Explicitly entering 0 is the
+      // only way to set a stored balance to zero; blank must not lose money.
+      if (!input.value.trim()) {
+        input.value = TreasuryAccounting.inputValue(account.balance);
+        setMoneyInputError(input);
+        return;
+      }
       const value = readMoneyInput(input, account.balance);
-      // Keep pre-existing precision when merely entering/leaving the field.
       if (value === account.balance) input.value = TreasuryAccounting.inputValue(account.balance);
-      else input.value = TreasuryAccounting.inputValue(commitBankBalance(account.id, input.value, input.dataset.scenarioId));
-      els.initialTotal.textContent = currency.format(getAvailableBalance(state.custom.accounts));
+      else {
+        input.value = TreasuryAccounting.inputValue(commitBankBalance(account.id, input.value, input.dataset.scenarioId));
+        els.initialTotal.textContent = currency.format(getAvailableBalance(state.custom.accounts));
+        // A blur can precede the click on a movement action. Keep its DOM node.
+        renderDashboard({ preserveMovementRows: true });
+      }
       els.captureFeedback.textContent = "";
-      // A blur can precede the click on a movement action. Preserve its DOM node.
-      renderDashboard({ preserveMovementRows: true });
     } else {
       const original = input === els.editMovementAmount && state.movementEdit?.ids.length === 1 ? state.movementEdit.original[0].amount : undefined;
       const value = readMoneyInput(input, original);
