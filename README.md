@@ -66,7 +66,75 @@ El nombre del campo es **estatus del movimiento**: **Confirmado** o **Por confir
 
 Los importes y saldos usan MXN, separador de miles y dos decimales: `$1,234.50`. Los negativos calculados y las salidas en las filas de movimientos se muestran entre paréntesis, como `($1,234.50)`; el cero monetario aparece como `$—`. Los indicadores principales también conservan centavos. Solo el eje de la gráfica abrevia cifras de millones para mantener legibles sus etiquetas.
 
-En captura, edición, duplicación y saldos bancarios, el símbolo `$` queda a la izquierda y las cifras a la derecha. Puedes escribir el número sin separadores; al salir se aplica el formato, sin reescribir el texto al enfocar o durante cada pulsación. Puedes pegar `1234.5`, `1,234.50`, `$1,234.50` o `MXN 1,234.50`. Una entrada vacía no equivale a cero: texto inválido, separadores incorrectos y milésimas se conservan para corregirlos y no se guardan como otro importe.
+En captura, edición, duplicación y saldos bancarios, el símbolo `# Control de Tesorería — Demo y proyección interactiva
+
+Dashboard demostrativo para consultar la posición diaria de caja y crear una proyección propia desde cero.
+
+> La vista de ejemplo utiliza datos completamente simulados. La información capturada por cada visitante se guarda únicamente en su navegador mediante `localStorage`; no se envía a servidores, bases de datos, Google Sheets ni APIs.
+
+## Flujo de uso
+
+### 1. Ver ejemplo
+
+La página abre con un escenario demostrativo para explicar cómo leer:
+
+- saldo disponible;
+- cobros y pagos del periodo;
+- saldo proyectado;
+- saldo mínimo;
+- movimientos confirmados y por confirmar;
+- evolución de la liquidez a 7, 14, 30, 60 o 90 días.
+
+Las opciones **2 meses** y **3 meses** corresponden a **60 y 90 días**, respectivamente, contados desde la fecha actual. El horizonte conserva su límite inclusivo.
+
+### 2. Crear mi proyección
+
+El CTA **Crear mi proyección** cambia a un escenario personal que comienza en cero. La persona puede:
+
+- agregar bancos y revisar el impacto antes de retirarlos;
+- nombrar cada banco;
+- capturar el saldo inicial por banco;
+- registrar cobros, pagos y traspasos programados;
+- asignar fecha, concepto, importe y estatus;
+- especificar opcionalmente el banco de cada pago;
+- clasificar opcionalmente los pagos por categoría;
+- incluir o excluir movimientos por confirmar;
+- revisar el forecast desde la fecha actual;
+- exportar los movimientos a Excel;
+- importar Excel o pegar una tabla con revisión previa;
+- duplicar un movimiento como borrador editable;
+- guardar y comparar escenarios independientes;
+- vaciar el escenario activo y comenzar de nuevo.
+
+## Criterios del proyecto
+
+- La fecha inicial corresponde al día actual y se actualiza al cruzar la medianoche o al volver a la pestaña, sin borrar una captura en curso.
+- La captura y la duplicación no admiten fechas anteriores al día actual. La importación permite históricos únicamente al activar esa opción; no entran en la proyección que comienza hoy.
+- El saldo inicial total se calcula a partir de la suma de los saldos bancarios.
+- La proyección es completamente client-side.
+- No requiere usuarios, contraseñas ni instalación.
+
+## Selección, filtros y edición de movimientos
+
+En **Próximos movimientos** puedes buscar por concepto y filtrar por tipo, estatus, banco, categoría y rango de fechas. **Mostrar → Todos los movimientos** permite recuperar movimientos históricos, fuera del horizonte o por confirmar que no están incluidos en la proyección. Los filtros afectan la tabla, la agrupación de pagos y la exportación de resultados filtrados; los indicadores y la gráfica conservan la proyección actual.
+
+El filtro de un banco incluye sus pagos asignados y los traspasos donde participa como origen o destino. También puedes elegir **Pagos sin banco** o **Banco no disponible**. El filtro **Sin categoría** muestra los pagos pendientes de clasificar.
+
+- Marca las casillas de las filas; la casilla de cabecera selecciona todos los resultados visibles.
+- Revisa los totales de cobros, pagos, traspasos y neto de la selección. Cada traspaso se cuenta una sola vez en su apartado y aporta cero al neto.
+- Usa **Editar seleccionados** para aplicar una nueva fecha, un nuevo estatus o ambos. En lote, marca únicamente los campos que quieras cambiar.
+- Haz doble clic sobre una fila o usa **Editar** para cambiar un movimiento individual. También hay un botón Editar en la lista de captura. En el editor individual puedes corregir el concepto y el importe; estos dos campos no se modifican en lote.
+- Revisa el número de movimientos que se actualizarán y pulsa **Guardar cambios**. **Cancelar** y Escape descartan el borrador.
+- Al cambiar filtros, horizonte o vista se limpia la selección. Seleccionar no cambia el estatus de un movimiento.
+- Una nueva fecha debe ser válida y no anterior a hoy. Puedes cambiar solo el estatus de un movimiento histórico sin modificar su fecha.
+
+El nombre del campo es **estatus del movimiento**: **Confirmado** o **Por confirmar**. La proyección personal conserva sus cambios en este navegador. En **Ver ejemplo**, la edición es temporal y se restablece al recargar.
+
+### Importes en formato contable
+
+Los importes y saldos usan MXN, separador de miles y dos decimales: `$1,234.50`. Los negativos calculados y las salidas en las filas de movimientos se muestran entre paréntesis, como `($1,234.50)`; el cero monetario aparece como `$—`. Los indicadores principales también conservan centavos. Solo el eje de la gráfica abrevia cifras de millones para mantener legibles sus etiquetas.
+
+ queda a la izquierda y las cifras a la derecha. Al enfocar un importe válido, el campo muestra su número sin separadores y selecciona las cifras para reemplazarlas fácilmente; **durante la escritura no mueve el cursor ni cambia el valor**. Al salir, lo presenta automáticamente con separadores de miles y dos decimales. Puedes escribir `1234.5` o pegar `1,234.50`, `$1,234.50` o `MXN 1,234.50`. **Un saldo cero se edita como `0.00`** aunque los reportes lo representen como `$—`. Si vacías un campo bancario y sales, recupera el último saldo guardado sin error ni escritura; para fijarlo expresamente en cero escribe `0`. Los borradores de importes vacíos no se convierten a cero. El texto realmente inválido o con milésimas se conserva para que pueda corregirse, sin alterar el importe almacenado.
 
 Los saldos bancarios se guardan al salir del campo. La captura y la edición de movimientos se guardan únicamente con sus respectivos botones. Mostrar el formato no cambia los números almacenados; los pagos siguen siendo importes positivos identificados por su tipo. Una edición de otro campo tampoco redondea importes anteriores intactos.
 
