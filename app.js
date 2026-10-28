@@ -272,6 +272,12 @@ const shortDate = new Intl.DateTimeFormat("es-MX", {
   month: "short",
 });
 
+const operationalDate = new Intl.DateTimeFormat("es-MX", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+});
+
 const longDate = new Intl.DateTimeFormat("es-MX", {
   day: "numeric",
   month: "long",
@@ -396,7 +402,6 @@ function finishMoneyInput(input) {
         // A blur can precede the click on a movement action. Keep its DOM node.
         renderDashboard({ preserveMovementRows: true });
       }
-      els.captureFeedback.textContent = "";
     } else {
       const original = input === els.editMovementAmount && state.movementEdit?.ids.length === 1 ? state.movementEdit.original[0].amount : undefined;
       const value = readMoneyInput(input, original);
@@ -406,7 +411,6 @@ function finishMoneyInput(input) {
     setMoneyInputError(input);
   } catch (error) {
     setMoneyInputError(input, error.message);
-    if (isBalance) els.captureFeedback.textContent = error.message;
   }
   if (input === els.editMovementAmount && state.movementEdit) updateMovementEditPreview();
 }
@@ -426,6 +430,53 @@ function bindMoneyInputs() {
   els.banksEditor.addEventListener("input", (event) => {
     if (event.target.matches("[data-money-input]")) setMoneyInputError(event.target);
   });
+}
+
+function setBankNameInputError(input, message = "") {
+  input.setCustomValidity(message);
+  if (message) input.setAttribute("aria-invalid", "true");
+  else input.removeAttribute("aria-invalid");
+  const error = input.dataset.nameError ? document.querySelector(`#${input.dataset.nameError}`) : null;
+  if (error) { error.textContent = message; error.hidden = !message; }
+}
+
+function commitBankName(bankId, rawValue, expectedScenarioId = state.activeScenarioId) {
+  requirePersonalScenario();
+  if (expectedScenarioId !== state.activeScenarioId) throw new Error("El escenario cambió. Revisa el nombre en el escenario actual.");
+  const accounts = state.custom.accounts.filter((account) => account.id === bankId);
+  if (accounts.length !== 1) throw new Error("No se puede identificar el banco de forma única.");
+  const name = rawValue.trim().slice(0, 50).trim();
+  // A blank draft cancels the edit; it must never replace a saved bank name.
+  if (!name || name === accounts[0].name) return getBankDisplayName(accounts[0]);
+  persistCustomCandidate({ ...state.custom, accounts: state.custom.accounts.map((account) => account.id === bankId ? { ...account, name } : account) });
+  return name;
+}
+
+function finishBankNameInput(input) {
+  if (input.isConnected === false) return;
+  const row = input.closest("[data-bank-id]");
+  const account = state.custom.accounts.find((item) => item.id === row?.dataset.bankId);
+  try {
+    if (!account || input.dataset.scenarioId !== state.activeScenarioId || state.mode !== "custom") throw new Error("El banco o el escenario cambió. Revisa el nombre en el destino actual.");
+    const previousName = getBankDisplayName(account);
+    // A legacy fallback is presentation only until the user actually edits it.
+    const unchangedDisplay = input.dataset.nameEdited !== "true" && input.value === previousName;
+    const name = unchangedDisplay ? previousName : commitBankName(row.dataset.bankId, input.value, input.dataset.scenarioId);
+    input.value = name;
+    delete input.dataset.nameEdited;
+    setBankNameInputError(input);
+    if (name === previousName) return;
+    row.querySelector("[data-retire-bank]")?.setAttribute("aria-label", `Retirar ${name}`);
+    renderCaptureBank();
+    renderMovementFilterOptions();
+    refreshMovementBankLabels();
+    // Focusout precedes a click. Keep movement and capture action nodes intact.
+    renderDashboard({ preserveMovementRows: true });
+  } catch (error) {
+    if (account) input.value = getBankDisplayName(account);
+    delete input.dataset.nameEdited;
+    setBankNameInputError(input, error.message);
+  }
 }
 
 function createDefaultCustomState() {
@@ -724,14 +775,19 @@ function getMovementBankId(movement) {
   return movement.type === "outflow" && typeof movement.bankId === "string" ? movement.bankId : "";
 }
 
-function getMovementBankLabel(movement, accounts = getActiveAccounts()) {
-  const bankId = getMovementBankId(movement);
-  if (!bankId) return "Sin banco asignado";
-  return accounts.find((account) => account.id === bankId)?.name || "Banco no disponible";
+function getBankDisplayName(account) {
+  return typeof account.name === "string" && account.name.trim() ? account.name : "Banco sin nombre";
 }
 
-function getBankLabel(id, accounts = getActiveAccounts()) {
-  return accounts.find((account) => account.id === id)?.name || "Banco no disponible";
+function getMovementBankLabel(movement, accounts = getActiveAccounts(), displayName = true) {
+  const bankId = getMovementBankId(movement);
+  if (!bankId) return "Sin banco asignado";
+  return getBankLabel(bankId, accounts, displayName);
+}
+
+function getBankLabel(id, accounts = getActiveAccounts(), displayName = true) {
+  const account = accounts.find((item) => item.id === id);
+  return account ? (displayName ? getBankDisplayName(account) : account.name || "Banco no disponible") : "Banco no disponible";
 }
 
 function getMovementCategoryId(movement) {
@@ -750,6 +806,32 @@ function getMovementTypeLabel(movement) {
 function getMovementAccountLabel(movement, accounts = getActiveAccounts()) {
   if (movement.type === "transfer") return `${getBankLabel(movement.fromBankId, accounts)} → ${getBankLabel(movement.toBankId, accounts)}`;
   return movement.type === "outflow" ? getMovementBankLabel(movement, accounts) : "";
+}
+
+function getCaptureMovementDetails(movement, accounts = state.custom.accounts) {
+  const statusLabel = movement.status === "pending" ? "Por confirmar" : "Confirmado";
+  const accountLabel = getMovementAccountLabel(movement, accounts);
+  const categoryLabel = movement.type === "outflow" ? getMovementCategoryLabel(movement) : "";
+  return [operationalDate.format(parseISODate(movement.date)), getMovementTypeLabel(movement), statusLabel,
+    accountLabel, categoryLabel].filter(Boolean).join(" · ");
+}
+
+function refreshMovementBankLabels() {
+  const movements = new Map(getActiveMovements().map((movement) => [movement.id, movement]));
+  els.movementsTableBody.querySelectorAll("[data-movement-id]").forEach((row) => {
+    const movement = movements.get(row.dataset.movementId);
+    const label = row.querySelector(".movement-bank");
+    if (movement && label) label.textContent = getMovementAccountLabel(movement);
+  });
+  els.captureList.querySelectorAll("[data-movement-id]").forEach((row) => {
+    const movement = movements.get(row.dataset.movementId);
+    const details = row.querySelector("[data-capture-details]");
+    if (movement && details) details.textContent = getCaptureMovementDetails(movement);
+  });
+  els.paymentGroups.querySelectorAll("[data-payment-details]").forEach((details) => {
+    const movement = movements.get(details.dataset.paymentDetails);
+    if (movement) details.textContent = `${operationalDate.format(parseISODate(movement.date))} · ${getMovementBankLabel(movement)}`;
+  });
 }
 
 function getMovementCashImpact(movement) {
@@ -789,7 +871,7 @@ function renderCategoryOptions(select, value = "") {
 
 function renderTransferOptions(select, accounts, value = "") {
   select.innerHTML = '<option value="">Selecciona una cuenta</option>'
-    + accounts.map((account) => `<option value="${escapeHTML(account.id)}">${escapeHTML(account.name)}</option>`).join("");
+    + accounts.map((account) => `<option value="${escapeHTML(account.id)}">${escapeHTML(getBankDisplayName(account))}</option>`).join("");
   select.value = accounts.some((account) => account.id === value) ? value : "";
 }
 
@@ -797,7 +879,7 @@ function renderBankOptions(select, accounts, bankId = "", preserveUnavailable = 
   const available = accounts.some((account) => account.id === bankId);
   const selectedId = available || preserveUnavailable ? bankId : "";
   select.innerHTML = '<option value="">Sin banco asignado</option>'
-    + accounts.map((account) => `<option value="${escapeHTML(account.id)}">${escapeHTML(account.name)}</option>`).join("")
+    + accounts.map((account) => `<option value="${escapeHTML(account.id)}">${escapeHTML(getBankDisplayName(account))}</option>`).join("")
     + (selectedId && !available ? `<option value="${escapeHTML(selectedId)}" disabled>Banco no disponible</option>` : "");
   select.value = selectedId;
 }
@@ -938,7 +1020,7 @@ function renderPaymentGroups() {
     <details class="payment-category" ${group.id === "" ? "open" : ""}>
       <summary class="category-heading"><strong>${group.label}</strong><span>${group.movements.length} ${group.movements.length === 1 ? "pago" : "pagos"}</span><strong>${detailCurrency.format(group.total)}</strong></summary>
       ${group.movements.length ? group.movements.map((movement) => `<div class="category-payment">
-        <div><strong>${escapeHTML(movement.concept)}</strong><small>${shortDate.format(parseISODate(movement.date))} · ${escapeHTML(getMovementBankLabel(movement))}</small></div>
+        <div><strong>${escapeHTML(movement.concept)}</strong><small data-payment-details="${escapeHTML(movement.id)}">${operationalDate.format(parseISODate(movement.date))} · ${escapeHTML(getMovementBankLabel(movement))}</small></div>
         <span class="amount-out">${detailCurrency.format(movement.amount)}</span>
       </div>`).join("") : '<p class="category-empty">No hay pagos sin categoría con estos filtros.</p>'}
     </details>`).join("");
@@ -962,7 +1044,7 @@ function syncMovementFilterControls() {
 
 function renderMovementFilterOptions() {
   els.movementBankFilter.innerHTML = '<option value="all">Todos los bancos</option><option value="unassigned">Pagos sin banco</option><option value="unavailable">Banco no disponible</option>'
-    + getActiveAccounts().map((account) => `<option value="${escapeHTML(account.id)}">${escapeHTML(account.name)}</option>`).join("");
+    + getActiveAccounts().map((account) => `<option value="${escapeHTML(account.id)}">${escapeHTML(getBankDisplayName(account))}</option>`).join("");
   const bank = state.movementFilters.bank || "all";
   const validBank = ["all", "unassigned", "unavailable"].includes(bank) || getActiveAccounts().some((account) => account.id === bank);
   state.movementFilters.bank = validBank ? bank : "all";
@@ -1463,7 +1545,7 @@ function openBankRetirement(bankId, opener = document.activeElement) {
   try {
     const impact = getBankRemovalImpact(bankId);
     state.bankRetirement = { bankId, opener };
-    els.bankRetireTitle.textContent = `Retirar ${impact.account.name}`;
+    els.bankRetireTitle.textContent = `Retirar ${getBankDisplayName(impact.account)}`;
     els.bankRetireDescription.textContent = "Revisa el saldo y todos los movimientos vinculados antes de retirar el banco.";
     els.bankRetireImpact.innerHTML = `<dl class="bank-retire-impact-list">
       <div><dt>Saldo inicial</dt><dd>${detailCurrency.format(impact.account.balance)}</dd></div>
@@ -1487,7 +1569,7 @@ function submitBankRetirement() {
     els.bankRetireDialog.close();
     renderBuilder();
     renderDashboard();
-    els.captureFeedback.textContent = `${impact.account.name} retirado. Sus pagos se conservaron.`;
+    els.captureFeedback.textContent = `${getBankDisplayName(impact.account)} retirado. Sus pagos se conservaron.`;
     els.addBankButton.focus();
   } catch (error) {
     els.bankRetireError.textContent = error.message;
@@ -1502,16 +1584,20 @@ function renderBanksEditor() {
       (account, index) => `
         <div class="bank-row" data-bank-id="${escapeHTML(account.id)}">
           <span class="bank-row-number">BANCO ${index + 1}</span>
-          <button class="bank-retire-button" type="button" data-retire-bank="${escapeHTML(account.id)}" aria-label="Retirar ${escapeHTML(account.name)}">Retirar</button>
+          <button class="bank-retire-button" type="button" data-retire-bank="${escapeHTML(account.id)}" aria-label="Retirar ${escapeHTML(getBankDisplayName(account))}">Retirar</button>
           <div class="field-group">
             <label for="bank-name-${index}">Nombre</label>
             <input
               id="bank-name-${index}"
               type="text"
               maxlength="50"
-              value="${escapeHTML(account.name)}"
+              value="${escapeHTML(getBankDisplayName(account))}"
               data-field="name"
+              data-name-error="bank-name-error-${index}"
+              data-scenario-id="${escapeHTML(state.activeScenarioId)}"
+              aria-describedby="bank-name-error-${index}"
             />
+            <p class="money-input-error" id="bank-name-error-${index}" role="alert" hidden></p>
           </div>
           <div class="field-group">
             <label for="bank-balance-${index}">Saldo (MXN)</label>
@@ -1551,15 +1637,11 @@ function renderCaptureList() {
     .map((movement) => {
       const isInflow = movement.type === "inflow";
       const isTransfer = movement.type === "transfer";
-      const typeLabel = getMovementTypeLabel(movement);
-      const statusLabel = movement.status === "pending" ? "Por confirmar" : "Confirmado";
-      const accountLabel = getMovementAccountLabel(movement, state.custom.accounts);
-      const categoryLabel = movement.type === "outflow" ? getMovementCategoryLabel(movement) : "";
       return `
         <div class="capture-item" data-movement-id="${escapeHTML(movement.id)}">
           <div>
             <strong>${escapeHTML(movement.concept)}</strong>
-            <small>${shortDate.format(parseISODate(movement.date))} · ${typeLabel} · ${statusLabel}${accountLabel ? ` · ${escapeHTML(accountLabel)}` : ""}${categoryLabel ? ` · ${categoryLabel}` : ""}</small>
+            <small data-capture-details>${escapeHTML(getCaptureMovementDetails(movement))}</small>
           </div>
           <span class="capture-amount ${isTransfer ? "amount-transfer" : isInflow ? "amount-in" : "amount-out"}">
             ${isTransfer ? "↔ " : ""}${detailCurrency.format(isInflow || isTransfer ? movement.amount : -movement.amount)}
@@ -1612,7 +1694,7 @@ function renderAccounts(accounts, movements = getFilteredMovements()) {
       const afterTransfers = account.balance + transferNet;
       return `
         <tr role="row">
-          <td role="cell" data-label="Banco"><span class="account-name">${escapeHTML(account.name)}</span></td>
+          <td role="cell" data-label="Banco"><span class="account-name">${escapeHTML(getBankDisplayName(account))}</span></td>
           <td role="cell" data-label="Saldo inicial" class="align-right amount">${detailCurrency.format(account.balance)}</td>
           <td role="cell" data-label="Participación" class="align-right account-share">${new Intl.NumberFormat("es-MX", {
             style: "percent",
@@ -1665,7 +1747,9 @@ function renderInsights(filteredMovements, forecastSeries) {
 
   els.minimumBalance.textContent = currency.format(minimumPoint.balance);
   els.minimumBalanceDate.textContent =
-    minimumPoint.day === 0 ? "Saldo al inicio del escenario" : `Estimado para el ${longDate.format(minimumPoint.date)}`;
+    minimumPoint.day === 0
+      ? (minimumPoint.movements.length ? "Estimado para hoy, tras los movimientos" : "Saldo al inicio del escenario")
+      : `Estimado para el ${longDate.format(minimumPoint.date)}`;
 
   if (largestOutflow) {
     els.largestOutflow.textContent = currency.format(largestOutflow.amount);
@@ -1685,9 +1769,12 @@ function renderMovements() {
     + (state.mode === "demo" ? "Los cambios del ejemplo son temporales y se restablecen al recargar." : "Tus cambios se guardan solo en este navegador.");
   els.movementSummary.textContent = `${filteredMovements.length} de ${getActiveMovements().length} movimientos`;
   if (filteredMovements.length === 0) {
+    const emptyMessage = getActiveMovements().length === 0
+      ? "Aún no has registrado movimientos. Agrega uno o importa una tabla para comenzar."
+      : "No hay movimientos con estos filtros. Prueba Todos los movimientos o limpia los filtros.";
     els.movementsTableBody.innerHTML = `
       <tr class="empty-state">
-        <td colspan="7">No hay movimientos con estos filtros. Prueba Todos los movimientos o limpia los filtros.</td>
+        <td colspan="7">${emptyMessage}</td>
       </tr>
     `;
     updateMovementSelection();
@@ -1707,7 +1794,7 @@ function renderMovements() {
           <td role="cell" class="movement-selection-cell"><input class="movement-checkbox" type="checkbox"
             data-select-movement="${escapeHTML(movement.id)}"
             aria-label="Seleccionar ${escapeHTML(movement.concept)} del ${escapeHTML(movement.date)}" /></td>
-          <td role="cell" data-label="Fecha">${shortDate.format(parseISODate(movement.date))}</td>
+          <td role="cell" data-label="Fecha">${operationalDate.format(parseISODate(movement.date))}</td>
           <td role="cell" data-label="Concepto" class="movement-concept-cell"><span class="movement-concept">${escapeHTML(movement.concept)}</span>${isInflow ? "" : `<small class="movement-bank">${escapeHTML(getMovementAccountLabel(movement))}</small>`}${movement.type === "outflow" ? `<small class="movement-category">${getMovementCategoryLabel(movement)}</small>` : ""}</td>
           <td role="cell" data-label="Tipo">${getMovementTypeLabel(movement)}</td>
           <td role="cell" data-label="Estatus"><span class="status ${statusClass}">${statusLabel}</span></td>
@@ -1913,22 +2000,74 @@ function setChartScaleMode(mode) {
   renderDashboard();
 }
 
+function getChartDimensions() {
+  const bounds = els.forecastChart.getBoundingClientRect?.();
+  return {
+    width: Number.isFinite(bounds?.width) && bounds.width > 0 ? bounds.width : 1000,
+    height: Number.isFinite(bounds?.height) && bounds.height > 0 ? bounds.height : 340,
+  };
+}
+
+function getChartLayout(width, height, axisLabels = []) {
+  // Reserve space for the existing financial labels at their actual font size.
+  // Keep enough plot area on narrow screens without scaling the SVG text.
+  const labelWidth = Math.max(0, ...axisLabels.map((label) => label.length * 7.5));
+  const margin = { top: 24, right: 16, bottom: 48, left: Math.min(width * 0.55, Math.max(90, labelWidth + 22)) };
+  return { width, height, margin, plotWidth: Math.max(1, width - margin.left - margin.right),
+    plotHeight: Math.max(1, height - margin.top - margin.bottom) };
+}
+
+let lastChartDimensions = null;
+let chartResizeObserver = null;
+let chartResizeBound = false;
+
+function redrawForecastChart() {
+  const startingBalance = getAvailableBalance(getActiveAccounts());
+  const movements = getFilteredMovements();
+  renderChart(getForecastSeries(movements, startingBalance), { hasData: startingBalance !== 0 || movements.length > 0 });
+}
+
+function bindChartResize() {
+  if (chartResizeBound) return;
+  chartResizeBound = true;
+  let queued = false;
+  const resize = () => {
+    const dimensions = getChartDimensions();
+    if (queued || (lastChartDimensions?.width === dimensions.width && lastChartDimensions?.height === dimensions.height)) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      // Do not rebuild tables, inputs or live announcements during a resize.
+      redrawForecastChart();
+    });
+  };
+  window.addEventListener?.("resize", resize);
+  if (typeof ResizeObserver === "function") {
+    chartResizeObserver = new ResizeObserver(resize);
+    chartResizeObserver.observe(els.forecastChart);
+  }
+}
+
 function renderChart(series, options = {}) {
   updateChartScaleControls();
+  const { width, height } = getChartDimensions();
+  lastChartDimensions = { width, height };
+  els.forecastChart.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  els.forecastChart.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
   if (!options.hasData) {
     els.forecastChart.setAttribute(
       "aria-label",
       "La proyección todavía no contiene saldos ni movimientos.",
     );
-    els.forecastChart.innerHTML = `
-      <text class="chart-empty-title" x="500" y="148" text-anchor="middle">
-        Agrega el saldo de al menos un banco
-      </text>
-      <text class="chart-empty-copy" x="500" y="180" text-anchor="middle">
-        o registra un cobro o pago para generar la proyección.
-      </text>
-    `;
+    const lines = width < 480 ? [
+      ["chart-empty-title", "Agrega el saldo"], ["chart-empty-title", "de un banco"],
+      ["chart-empty-copy", "o registra un cobro o pago"], ["chart-empty-copy", "para ver la proyección."],
+    ] : [["chart-empty-title", "Agrega el saldo de al menos un banco"],
+      ["chart-empty-copy", "o registra un cobro o pago para generar la proyección."]];
+    const firstLineY = (height - (lines.length - 1) * 30) / 2;
+    els.forecastChart.innerHTML = lines.map(([className, text], index) =>
+      `<text class="${className}" x="${width / 2}" y="${firstLineY + index * 30}" text-anchor="middle">${text}</text>`).join("");
     return;
   }
 
@@ -1939,12 +2078,8 @@ function renderChart(series, options = {}) {
     }`,
   );
 
-  const width = 1000;
-  const height = 340;
-  const margin = { top: 24, right: 24, bottom: 48, left: 126 };
-  const plotWidth = width - margin.left - margin.right;
-  const plotHeight = height - margin.top - margin.bottom;
   const { yMin, yMax, tickValues } = getChartScale(series);
+  const { margin, plotWidth, plotHeight } = getChartLayout(width, height, tickValues.map(formatChartAxisValue));
 
   const x = (day) => margin.left + (day / state.horizon) * plotWidth;
   const y = (balance) => margin.top + ((yMax - balance) / (yMax - yMin || 1)) * plotHeight;
@@ -1969,12 +2104,13 @@ function renderChart(series, options = {}) {
     .join("");
 
   const preferredLabels = state.horizon === 7 ? 7 : state.horizon === 14 ? 7 : 6;
-  const xTickStep = Math.max(1, Math.round(state.horizon / preferredLabels));
+  const labelCount = Math.max(2, Math.min(preferredLabels + 1, Math.floor(plotWidth / 80) + 1));
+  const labelDays = new Set(Array.from({ length: labelCount }, (_, index) => Math.round(index * state.horizon / (labelCount - 1))));
   const xLabels = series
-    .filter((point) => point.day === 0 || point.day === state.horizon || point.day % xTickStep === 0)
+    .filter((point) => labelDays.has(point.day))
     .map(
       (point) => `
-        <text class="chart-axis-label" x="${x(point.day)}" y="${height - 16}" text-anchor="middle">
+        <text class="chart-axis-label" x="${x(point.day)}" y="${height - 16}" text-anchor="${point.day === 0 ? "start" : point.day === state.horizon ? "end" : "middle"}">
           ${point.day === 0 ? "Hoy" : shortDate.format(point.date)}
         </text>
       `,
@@ -2193,10 +2329,10 @@ function getExportRows(scope = "visible") {
     id: movement.id, date: movement.date, concept: movement.concept,
     type: getMovementTypeLabel(movement), status: movement.status === "pending" ? "Por confirmar" : "Confirmado",
     amount: movement.amount,
-    bank: movement.type === "outflow" && getMovementBankId(movement) ? getMovementBankLabel(movement) : "",
+    bank: movement.type === "outflow" && getMovementBankId(movement) ? getMovementBankLabel(movement, getActiveAccounts(), false) : "",
     category: movement.type === "outflow" ? getMovementCategoryLabel(movement) : "",
-    fromBank: movement.type === "transfer" ? getBankLabel(movement.fromBankId) : "",
-    toBank: movement.type === "transfer" ? getBankLabel(movement.toBankId) : "",
+    fromBank: movement.type === "transfer" ? getBankLabel(movement.fromBankId, getActiveAccounts(), false) : "",
+    toBank: movement.type === "transfer" ? getBankLabel(movement.toBankId, getActiveAccounts(), false) : "",
     bankId: movement.type === "outflow" ? getMovementBankId(movement) : "",
     fromBankId: movement.type === "transfer" ? movement.fromBankId : "",
     toBankId: movement.type === "transfer" ? movement.toBankId : "",
@@ -2401,6 +2537,7 @@ async function nextImportStep() {
   const draft = state.importDraft;
   if (!draft || draft.busy) return;
   els.importError.textContent = "";
+  let focusTarget = null;
   try {
     assertImportContext(draft);
     if (draft.step === "source") {
@@ -2439,7 +2576,7 @@ async function nextImportStep() {
       els.importSheetField.hidden = documentData.sheets.length === 1;
       draft.step = "mapping";
       renderImportMapping(true);
-      els.importHeaderRow.focus();
+      focusTarget = els.importHeaderRow;
     } else if (draft.step === "mapping") {
       const sheet = getImportSheet();
       const headerRow = readImportHeaderRow(sheet);
@@ -2459,17 +2596,19 @@ async function nextImportStep() {
       els.importReviewFilter.value = "all";
       draft.step = "review";
       renderImportReview();
-      els.importReviewFilter.focus();
+      focusTarget = els.importReviewFilter;
     }
   } catch (error) {
     if (state.importDraft === draft) {
       els.importError.textContent = error.message;
-      els.importError.focus();
+      focusTarget = els.importError;
     }
   } finally {
     if (state.importDraft === draft) {
       draft.busy = false;
       renderImportStep();
+      // Reveal the step and re-enable its controls before requesting focus.
+      if (els.movementImportDialog.open) focusTarget?.focus();
     }
   }
 }
@@ -2486,7 +2625,7 @@ function renderImportReview() {
   const pageRows = visible.slice(draft.reviewPage * 50, (draft.reviewPage + 1) * 50);
   els.importReviewSummary.innerHTML = `<span><strong>${summary.valid}</strong> válidas</span><span><strong>${summary.invalid}</strong> con errores</span><span><strong>${summary.possibleDuplicates}</strong> posibles duplicados</span><span><strong>${draft.selectedRows.size}</strong> seleccionadas</span>`;
   const packageWarnings = (draft.sourceDocument.warnings || []).map((warning) => typeof warning === "string" ? warning : warning.message).filter(Boolean);
-  els.importReviewHelp.textContent = `Las filas con errores no se pueden seleccionar. Los posibles duplicados empiezan desmarcados; puedes seleccionarlos si son movimientos distintos.${draft.allowPast ? " Los históricos se consultan en Todos los movimientos y no afectan la proyección desde hoy." : ""}${packageWarnings.length ? ` Avisos del archivo: ${packageWarnings.join(" ")}` : ""}`;
+  els.importReviewHelp.textContent = `Las filas con errores no se pueden seleccionar. «Seleccionar válidas sin duplicados» reemplaza la selección y desmarca los posibles duplicados, incluso los seleccionados manualmente. Puedes volver a marcarlos individualmente si son movimientos distintos.${draft.allowPast ? " Los históricos se consultan en Todos los movimientos y no afectan la proyección desde hoy." : ""}${packageWarnings.length ? ` Avisos del archivo: ${packageWarnings.join(" ")}` : ""}`;
   els.importReviewBody.innerHTML = pageRows.length ? pageRows.map((row) => {
     const movement = row.movement;
     const sourceRow = getImportSheet()?.rows[row.rowNumber - 1];
@@ -2539,7 +2678,10 @@ function confirmImportMovements() {
 function bindImportEvents() {
   els.openImportButton.addEventListener("click", openImportDialog);
   els.cancelImport.addEventListener("click", cancelImportDraft);
-  els.movementImportDialog.addEventListener("close", cancelImportDraft);
+  els.movementImportDialog.addEventListener("close", () => {
+    // A queued close event from the previous dialog must not cancel a new draft.
+    if (!els.movementImportDialog.open) cancelImportDraft();
+  });
   els.movementImportDialog.addEventListener("cancel", cancelImportDraft);
   els.importSource.addEventListener("change", syncImportSource);
   els.importFile.addEventListener("change", () => {
@@ -2928,32 +3070,13 @@ function bindEvents() {
   });
 
   els.banksEditor.addEventListener("input", (event) => {
-    const row = event.target.closest("[data-bank-id]");
-    const field = event.target.dataset.field;
-    if (!row || !field) {
-      return;
+    if (event.target.dataset.field === "name") {
+      event.target.dataset.nameEdited = "true";
+      setBankNameInputError(event.target);
     }
-
-    const account = state.custom.accounts.find((item) => item.id === row.dataset.bankId);
-    if (!account) {
-      return;
-    }
-
-    if (field !== "name") return;
-    const value = event.target.value.slice(0, 50) || "Banco";
-    try {
-      persistCustomCandidate({ ...state.custom, accounts: state.custom.accounts.map((item) => item.id === account.id ? { ...item, [field]: value } : item) });
-      els.captureFeedback.textContent = "";
-    } catch (error) {
-      els.captureFeedback.textContent = error.message;
-      return;
-    }
-    els.initialTotal.textContent = detailCurrency.format(getAvailableBalance(state.custom.accounts));
-    if (field === "name") {
-      renderCaptureBank();
-      renderCaptureList();
-    }
-    renderDashboard();
+  });
+  els.banksEditor.addEventListener("focusout", (event) => {
+    if (event.target.dataset.field === "name") finishBankNameInput(event.target);
   });
 
   els.movementForm.addEventListener("submit", addMovement);
@@ -3096,6 +3219,7 @@ function initialize() {
 
   bindEvents();
   setMode("demo");
+  bindChartResize();
   scheduleMidnightRefresh();
 }
 

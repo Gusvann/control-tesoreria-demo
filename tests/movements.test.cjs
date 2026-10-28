@@ -11,6 +11,7 @@ const accountingModule = require("../accounting.js");
 const script = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 assert.match(script, /\binitialize\(\);\s*$/u, "The application must retain its final initialize() call.");
 const source = script.replace(/\binitialize\(\);\s*$/u, "");
+const markup = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const STORAGE_KEY = "ivanTreasuryProjectionV2";
 
 // A small DOM adapter keeps these contract tests dependency-free. Browser tests
@@ -26,6 +27,7 @@ class Element {
     this.indeterminate = false;
     this.hidden = false;
     this.open = false;
+    this.isConnected = true;
     this.dataset = {};
     this.attributes = {};
     this.listeners = new Map();
@@ -53,7 +55,20 @@ class Element {
     const event = { target: this, preventDefault() {}, ...fields };
     for (const listener of this.listeners.get(type) || []) listener(event);
   }
-  focus() { this.focused = true; }
+  focus() {
+    // Model the preconditions for focus, not browser rendering or native events.
+    // In particular, a focus request before revealing an ancestor must fail.
+    for (let element = this; element; element = element.parentElement) {
+      if (element.hidden || element.disabled || element.isConnected === false
+        || element.classes?.has("is-hidden") || (element.tagName === "DIALOG" && !element.open)) return;
+    }
+    if (this.ownerDocument) {
+      if (this.ownerDocument.activeElement) this.ownerDocument.activeElement.focused = false;
+      this.ownerDocument.activeElement = this;
+      this.ownerDocument.focusHistory.push(this);
+    }
+    this.focused = true;
+  }
   select() { this.selectionInvoked = true; }
   scrollIntoView() {}
   showModal() { this.open = true; }
@@ -67,8 +82,12 @@ class Element {
   matches(selector) {
     return selector.split(",").some((part) => {
       const value = part.trim();
-      const data = /^\[data-([a-z-]+)\]$/u.exec(value);
-      if (data) return data[1].replace(/-([a-z])/gu, (_, letter) => letter.toUpperCase()) in this.dataset;
+      if (value.startsWith("#")) return this.id === value.slice(1);
+      const data = /^\[data-([a-z-]+)(?:=["']?([^\]"']*)["']?)?\]$/u.exec(value);
+      if (data) {
+        const key = data[1].replace(/-([a-z])/gu, (_, letter) => letter.toUpperCase());
+        return data[2] === undefined ? key in this.dataset : this.dataset[key] === data[2];
+      }
       return value.toLowerCase() === this.tagName.toLowerCase();
     });
   }
@@ -78,6 +97,53 @@ class Element {
     }
     return null;
   }
+}
+
+function documentAdapter(elements) {
+  const document = {
+    focusHistory: [],
+    querySelector(selector) {
+      if (!elements.has(selector)) {
+        const element = new Element();
+        element.ownerDocument = document;
+        elements.set(selector, element);
+      }
+      return elements.get(selector);
+    },
+    querySelectorAll() { return []; },
+    body: new Element("BODY"),
+  };
+  document.body.ownerDocument = document;
+  // Read only the static hierarchy and visibility from the real HTML. Values,
+  // event defaults, layout and dialog focus trapping remain browser concerns.
+  const stack = [];
+  const voidTags = new Set(["AREA", "BASE", "BR", "COL", "EMBED", "HR", "IMG", "INPUT", "LINK", "META", "PARAM", "SOURCE", "TRACK", "WBR"]);
+  for (const token of markup.matchAll(/<(\/?)([a-z][a-z0-9-]*)([^>]*)>/giu)) {
+    const [, closing, name, attributes] = token;
+    const tag = name.toUpperCase();
+    if (closing) {
+      const index = stack.findLastIndex((element) => element.tagName === tag);
+      if (index >= 0) stack.length = index;
+      continue;
+    }
+    const element = tag === "BODY" ? document.body : new Element(tag);
+    element.ownerDocument = document;
+    element.parentElement = stack.at(-1);
+    const attrs = [...attributes.matchAll(/([\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+)))?/gu)];
+    for (const [, key, double, single, bare] of attrs) {
+      const value = double ?? single ?? bare ?? "";
+      element.attributes[key] = value;
+      if (key === "id") { element.id = value; elements.set(`#${value}`, element); }
+      if (key === "class") value.split(/\s+/u).filter(Boolean).forEach((name) => element.classes.add(name));
+      if (key === "hidden" || key === "disabled") element[key] = true;
+      if (key.startsWith("data-")) element.dataset[key.slice(5).replace(/-([a-z])/gu, (_, letter) => letter.toUpperCase())] = value;
+    }
+    if (!voidTags.has(tag) && !/\/\s*$/u.test(attributes)) stack.push(element);
+  }
+  document.activeElement = new Element("BUTTON");
+  document.activeElement.ownerDocument = document;
+  document.activeElement.parentElement = document.body;
+  return document;
 }
 
 let harnessSequence = 0;
@@ -114,6 +180,8 @@ function harness(saved, options = {}) {
     removeItem: (key) => values.delete(key),
   };
   let nextId = 0;
+  const document = documentAdapter(elements);
+  const windowListeners = new Map();
   const context = vm.createContext({
     console: { warn() {}, error() {}, log() {} },
     Intl,
@@ -128,16 +196,14 @@ function harness(saved, options = {}) {
     TreasuryAccounting: accountingModule,
     crypto: { randomUUID: () => `synthetic-${harnessId}-${++nextId}` },
     localStorage: storage,
-    document: {
-      querySelector(selector) {
-        if (!elements.has(selector)) elements.set(selector, new Element());
-        return elements.get(selector);
+    document,
+    window: {
+      confirm: () => true, setTimeout: schedule, clearTimeout: unschedule,
+      addEventListener(type, listener) {
+        if (!windowListeners.has(type)) windowListeners.set(type, []);
+        windowListeners.get(type).push(listener);
       },
-      querySelectorAll() { return []; },
-      activeElement: new Element("BUTTON"),
-      body: new Element("BODY"),
     },
-    window: { confirm: () => true, setTimeout: schedule, clearTimeout: unschedule },
     setTimeout: schedule,
     clearTimeout: unschedule,
     requestAnimationFrame: (callback) => callback(),
@@ -148,6 +214,8 @@ function harness(saved, options = {}) {
     elements,
     clock,
     timers,
+    document,
+    emitWindow(type, event = {}) { for (const listener of windowListeners.get(type) || []) listener(event); },
     advanceTime(milliseconds) {
       clock.now += milliseconds;
       const due = [...timers.entries()].filter(([, timer]) => timer.at <= clock.now);
@@ -2428,4 +2496,471 @@ test("MONEY UX: blank bank fields cancel the change instead of displaying a form
   assert.equal(input.validationMessage, "");
   assert.equal(h.run("state.custom.accounts[0].balance"), 9876.54);
   assert.equal(h.storage.writes, 0);
+});
+
+// Regression contracts for the UI audit. These deliberately exercise the
+// application event boundaries; the adapter does not replace browser QA.
+function bankEditorInput(h, field, bankId = "bank-a") {
+  const editor = h.elements.get("#banksEditor");
+  const row = new Element("DIV");
+  row.dataset.bankId = bankId;
+  row.parentElement = editor;
+  row.ownerDocument = h.document;
+  const input = new Element("INPUT");
+  input.parentElement = row;
+  input.ownerDocument = h.document;
+  Object.assign(input.dataset, { field, scenarioId: h.run("state.activeScenarioId") });
+  if (field === "balance") Object.assign(input.dataset, { moneyInput: "balance", moneyError: `balance-error-${bankId}` });
+  else input.dataset.nameError = `name-error-${bankId}`;
+  return { editor, input };
+}
+
+function visibleText(html) {
+  return html.replace(/<[^>]*>/gu, " ").replace(/\s+/gu, " ").trim();
+}
+
+test("UI harness: focus ignores hidden or disabled controls and hidden ancestors", () => {
+  const h = harness();
+  const control = h.elements.get("#importHeaderRow");
+  const original = h.document.activeElement;
+  control.focus();
+  assert.equal(h.document.activeElement, original, "closed dialog and hidden step cannot receive focus");
+  h.run('els.movementImportDialog.showModal(); els.importMappingStep.hidden = false;');
+  control.disabled = true;
+  control.focus();
+  assert.equal(h.document.activeElement, original, "disabled controls cannot receive focus");
+  control.disabled = false;
+  control.focus();
+  assert.equal(h.document.activeElement, control);
+  control.focus();
+  assert.equal(control.focused, true, "refocusing the same node must retain its focus state");
+  h.run("els.importMappingStep.hidden = true;");
+  h.document.activeElement = original;
+  control.focus();
+  assert.equal(h.document.activeElement, original, "a hidden ancestor blocks focus even when the input itself is enabled");
+});
+
+test("UI2: cancelling an invalid bank balance removes its error without saving zero", () => {
+  const h = harness();
+  seed(h, [], [{ id: "bank-a", name: "Banco A", balance: 9876.54 }]);
+  h.run("bindEvents();");
+  const { editor, input } = bankEditorInput(h, "balance");
+  input.value = "importe inválido";
+  editor.emit("focusout", { target: input });
+  assert.equal(input.getAttribute("aria-invalid"), "true");
+  assert.ok(input.validationMessage);
+  input.value = "";
+  editor.emit("input", { target: input });
+  editor.emit("focusout", { target: input });
+  assert.equal(input.value, "9,876.54");
+  assert.equal(input.validationMessage, "");
+  assert.equal(input.getAttribute("aria-invalid"), null);
+  assert.equal(h.elements.get("#balance-error-bank-a").hidden, true);
+  assert.equal(h.run("els.captureFeedback.textContent"), "", "a cancelled balance error must not linger elsewhere");
+  assert.equal(h.run("state.custom.accounts[0].balance"), 9876.54);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("UI2: balance errors and cancellation preserve feedback from another operation", () => {
+  const h = harness();
+  seed(h, [], [{ id: "bank-a", name: "Banco A", balance: 500 }]);
+  h.run('bindEvents(); els.captureFeedback.textContent = "No se pudo importar el archivo elegido.";');
+  const { editor, input } = bankEditorInput(h, "balance");
+  for (const draft of ["abc", "", "500.00"]) {
+    input.value = draft;
+    editor.emit("focusout", { target: input });
+    assert.equal(h.run("els.captureFeedback.textContent"), "No se pudo importar el archivo elegido.", draft);
+  }
+  assert.equal(h.storage.writes, 0);
+});
+
+test("UI3: the same calendar day in different years stays distinguishable in every operational list", () => {
+  const h = harness();
+  const rows = [payment("old", "2025-01-15", { concept: "Servicio anual", categoryId: "costos" }),
+    payment("new", "2026-01-15", { concept: "Servicio anual", categoryId: "costos" })];
+  seedTreasury(h, rows);
+  h.run('state.movementFilters.scope = "all"; renderCaptureList(); renderMovements();');
+  for (const selector of ["#captureList", "#movementsTableBody", "#paymentGroups"]) {
+    const element = h.elements.get(selector);
+    assert.ok(element, `${selector} must exist`);
+    const text = visibleText(element.innerHTML);
+    assert.match(text, /2025/u, `${selector} must display the historical year as visible text`);
+    assert.match(text, /2026/u, `${selector} must display the other year as visible text`);
+  }
+  assert.deepEqual(h.json("state.custom.movements"), rows, "display formatting must not alter ISO dates");
+  assert.equal(h.storage.writes, 0);
+});
+
+test("UI6: typing a bank name is a draft and normalizes only after leaving the field", () => {
+  const h = harness();
+  seed(h, [], [{ id: "bank-a", name: "Banco A", balance: 450.25 }]);
+  h.run('bindEvents(); els.movementType.value = "outflow"; renderCaptureBank();');
+  const { editor, input } = bankEditorInput(h, "name");
+  input.value = "Banco A";
+  editor.emit("focusin", { target: input });
+  input.value = "  Cuenta principal  ";
+  input.selectionStart = 7;
+  editor.emit("input", { target: input });
+  assert.equal(input.value, "  Cuenta principal  ", "typing must not trim the draft or replace the caret");
+  assert.equal(input.selectionStart, 7);
+  assert.equal(h.run("state.custom.accounts[0].name"), "Banco A");
+  assert.equal(h.storage.writes, 0);
+  editor.emit("focusout", { target: input });
+  assert.equal(input.value, "Cuenta principal");
+  assert.deepEqual(h.saved().accounts, [{ id: "bank-a", name: "Cuenta principal", balance: 450.25 }]);
+  assert.match(h.run("els.movementBank.innerHTML"), /Cuenta principal/u);
+  assert.equal(h.storage.writes, 1);
+});
+
+test("UI6: empty or whitespace bank drafts cancel without blank accounts or storage writes", () => {
+  for (const draft of ["", "   ", "\t \n"]) {
+    const h = harness();
+    seed(h, [], [{ id: "bank-a", name: "Banco A", balance: 10 }]);
+    h.run("bindEvents();");
+    const { editor, input } = bankEditorInput(h, "name");
+    input.value = "Banco A";
+    editor.emit("focusin", { target: input });
+    input.value = draft;
+    editor.emit("input", { target: input });
+    editor.emit("focusout", { target: input });
+    assert.equal(input.value, "Banco A", JSON.stringify(draft));
+    assert.equal(h.run("state.custom.accounts[0].name"), "Banco A");
+    assert.equal(h.storage.writes, 0);
+  }
+});
+
+test("UI6: a committed bank name is trimmed, capped at 50 characters and stable on another blur", () => {
+  const h = harness();
+  seed(h, [], [{ id: "bank-a", name: "Banco A", balance: 10 }]);
+  h.run("bindEvents();");
+  const { editor, input } = bankEditorInput(h, "name");
+  input.value = `  ${"A".repeat(49)} ${"B".repeat(5)}  `;
+  editor.emit("input", { target: input });
+  editor.emit("focusout", { target: input });
+  assert.equal(input.value, "A".repeat(49), "trim again after truncation if the 50th character is whitespace");
+  assert.equal(h.saved().accounts[0].name, input.value);
+  const writes = h.storage.writes;
+  editor.emit("focusout", { target: input });
+  assert.equal(h.storage.writes, writes, "an unchanged name does not produce another write");
+});
+
+test("UI6: a failed bank-name save restores the saved name and preserves other feedback", () => {
+  const h = harness({ accounts: [{ id: "bank-a", name: "Banco A", balance: 10 }], movements: [] });
+  h.run('state.mode = "custom"; bindEvents(); els.captureFeedback.textContent = "Mensaje de otra operación";');
+  const before = h.saved();
+  const { editor, input } = bankEditorInput(h, "name");
+  input.value = "Nombre que no pudo guardarse";
+  h.storage.fail = true;
+  editor.emit("input", { target: input });
+  editor.emit("focusout", { target: input });
+  assert.equal(input.value, "Banco A");
+  assert.deepEqual(h.saved(), before);
+  assert.deepEqual(h.json("state.custom"), before);
+  assert.equal(h.storage.writes, 0);
+  assert.equal(input.getAttribute("aria-invalid"), "true");
+  assert.ok(h.elements.get("#name-error-bank-a").textContent);
+  assert.equal(h.run("els.captureFeedback.textContent"), "Mensaje de otra operación");
+});
+
+test("UI6: a bank-name draft from another scenario cannot rename a shared account ID", () => {
+  const h = harness();
+  seed(h, [], [{ id: "bank-a", name: "Banco A", balance: 10 }]);
+  h.run("bindEvents();");
+  const { editor, input } = bankEditorInput(h, "name");
+  input.value = "Borrador de Base";
+  h.run('createSavedScenario("Alternativa");');
+  const before = scenarioState(h);
+  const saved = h.saved();
+  const writes = h.storage.writes;
+  editor.emit("input", { target: input });
+  editor.emit("focusout", { target: input });
+  assert.deepEqual(scenarioState(h), before);
+  assert.deepEqual(h.saved(), saved);
+  assert.equal(h.storage.writes, writes);
+});
+
+test("UI6: a legacy whitespace name is displayed safely without an implicit data migration", () => {
+  const rawName = "   ";
+  const h = harness({ accounts: [{ id: "bank-a", name: rawName, balance: 500 }], movements: [] });
+  const original = h.saved();
+  h.run('state.mode = "custom"; bindEvents(); els.movementType.value = "outflow"; renderBuilder(); renderAccounts(state.custom.accounts);');
+  assert.match(h.run("els.banksEditor.innerHTML"), /value="Banco sin nombre"/u);
+  assert.match(visibleText(h.run("els.movementBank.innerHTML")), /Banco sin nombre/u);
+  assert.match(visibleText(h.run("els.accountsTableBody.innerHTML")), /Banco sin nombre/u);
+  const { editor, input } = bankEditorInput(h, "name");
+  input.value = "Banco sin nombre";
+  editor.emit("focusin", { target: input });
+  editor.emit("focusout", { target: input });
+  input.value = "";
+  editor.emit("input", { target: input });
+  editor.emit("focusout", { target: input });
+  assert.equal(input.value, "Banco sin nombre");
+  assert.equal(h.run("state.custom.accounts[0].name"), rawName);
+  assert.deepEqual(h.saved(), original);
+  assert.equal(h.storage.writes, 0, "rendering or cancelling must not rewrite legacy storage");
+  input.value = "  Cuenta recuperada  ";
+  editor.emit("input", { target: input });
+  editor.emit("focusout", { target: input });
+  assert.equal(input.value, "Cuenta recuperada");
+  assert.equal(h.saved().accounts[0].name, "Cuenta recuperada");
+  assert.equal(h.storage.writes, 1);
+});
+
+test("UI6: explicitly typing the fallback bank label is a real rename, not a cancelled draft", () => {
+  const h = harness({ accounts: [{ id: "bank-a", name: "   ", balance: 500 }], movements: [] });
+  h.run('state.mode = "custom"; bindEvents();');
+  const { editor, input } = bankEditorInput(h, "name");
+  input.value = "Banco sin nombre";
+  editor.emit("input", { target: input });
+  assert.equal(h.storage.writes, 0);
+  editor.emit("focusout", { target: input });
+  assert.equal(h.saved().accounts[0].name, "Banco sin nombre");
+  assert.equal(h.storage.writes, 1);
+});
+
+test("UI7: a minimum reached after today's payment is labelled as today's projected balance", () => {
+  const h = harness();
+  seed(h, [payment("today-payment", h.day(), { amount: 125 })], [{ id: "bank-a", name: "Banco A", balance: 1000 }]);
+  h.run("renderDashboard();");
+  assert.equal(h.run("els.minimumBalance.textContent"), "$875.00");
+  assert.match(h.run("els.minimumBalanceDate.textContent"), /hoy.*movimientos/iu);
+  assert.doesNotMatch(h.run("els.minimumBalanceDate.textContent"), /inicio del escenario/iu);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("UI7: when today has no movements the minimum can still describe the initial position", () => {
+  const h = harness();
+  seed(h, [movement("tomorrow-income", h.day(1), { amount: 125 })], [{ id: "bank-a", name: "Banco A", balance: 1000 }]);
+  h.run("renderDashboard();");
+  assert.equal(h.run("els.minimumBalance.textContent"), "$1,000.00");
+  assert.match(h.run("els.minimumBalanceDate.textContent"), /inicio del escenario/iu);
+});
+
+test("UI8: import focuses each next step only after revealing and enabling its controls", async () => {
+  const h = harness();
+  seedTreasury(h, []);
+  h.run('openImportDialog(); els.importSource.value = "paste"; els.importPaste.value = input;', `Fecha\tConcepto\tImporte\n${h.day(1)}\tPrueba de foco\t100`);
+  assert.equal(h.document.activeElement.id, "importSource");
+  await h.run("nextImportStep();");
+  assert.equal(h.run("state.importDraft.step"), "mapping");
+  assert.equal(h.run("state.importDraft.busy"), false);
+  assert.equal(h.run("els.importMappingStep.hidden"), false);
+  assert.equal(h.document.activeElement.id, "importHeaderRow");
+  await h.run("nextImportStep();");
+  assert.equal(h.run("state.importDraft.step"), "review");
+  assert.equal(h.document.activeElement.id, "importReviewFilter");
+  assert.equal(h.storage.writes, 0);
+});
+
+test("UI8: import errors keep a usable focus target and a successful retry reaches Columns", async () => {
+  const h = harness();
+  seedTreasury(h, []);
+  h.run('openImportDialog(); els.importSource.value = "file";');
+  h.elements.get("#importFile").files = [];
+  await h.run("nextImportStep();");
+  assert.equal(h.run("state.importDraft.step"), "source");
+  assert.equal(h.run("state.importDraft.busy"), false);
+  assert.equal(h.run("els.importSource.disabled"), false);
+  assert.equal(h.run("els.nextImport.disabled"), false);
+  assert.ok(h.run("els.importError.textContent"));
+  assert.equal(h.document.activeElement.id, "importError");
+  h.run('els.importSource.value = "paste"; els.importPaste.value = input;', `Fecha\tConcepto\tImporte\n${h.day(1)}\tReintento\t100`);
+  await h.run("nextImportStep();");
+  assert.equal(h.document.activeElement.id, "importHeaderRow");
+  assert.equal(h.run("els.importError.textContent"), "");
+});
+
+test("UI8: a cancelled asynchronous read never focuses a closed dialog", async () => {
+  let resolveRead;
+  let started;
+  const reading = new Promise((resolve) => { started = resolve; });
+  const h = harness(undefined, { importer: { ...importModule, readXlsx() {
+    return new Promise((resolve) => { resolveRead = resolve; started(); });
+  } } });
+  seedTreasury(h, []);
+  const opener = h.document.activeElement;
+  h.run("openImportDialog();");
+  h.elements.get("#importFile").files = [{ name: "focus.xlsx", size: 8, arrayBuffer: async () => new Uint8Array(8).buffer }];
+  const pending = h.run("nextImportStep();");
+  await Promise.race([reading, pending]);
+  assert.equal(typeof resolveRead, "function");
+  h.run("cancelImportDraft();");
+  assert.ok(h.document.activeElement === opener, "cancelling returns focus to the opener");
+  const focusCount = h.document.focusHistory.length;
+  resolveRead(importModule.parseText(`Fecha\tConcepto\tImporte\n${h.day(1)}\tLectura cancelada\t100`, { delimiter: "auto" }));
+  await pending;
+  assert.equal(h.run("state.importDraft"), null);
+  assert.equal(h.run("els.movementImportDialog.open"), false);
+  assert.ok(h.document.activeElement === opener, "late file completion must not move focus");
+  assert.equal(h.document.focusHistory.length, focusCount);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("UI9: initial emptiness offers capture or import; unmatched filters still explain filtering", () => {
+  const h = harness();
+  seedTreasury(h, []);
+  h.run("renderMovements();");
+  const empty = visibleText(h.run("els.movementsTableBody.innerHTML"));
+  assert.match(empty, /agrega.*importa/iu);
+  assert.doesNotMatch(empty, /estos filtros/iu);
+  seedTreasury(h, [payment("exists", h.day(1), { concept: "Renta" })]);
+  h.run('state.movementFilters.query = "sin coincidencia"; renderMovements();');
+  const filtered = visibleText(h.run("els.movementsTableBody.innerHTML"));
+  assert.match(filtered, /filtros/iu);
+  assert.doesNotMatch(filtered, /no has registrado/iu);
+  assert.equal(h.storage.writes, 0);
+});
+
+test("UI10: selecting valid rows resets manual duplicate choices and the UI makes that explicit", async () => {
+  const h = harness();
+  seedTreasury(h, [payment("existing", h.day(1), { concept: "Ya registrado", amount: 100 })]);
+  h.run("bindEvents();");
+  await pasteImportReview(h, `Fecha\tConcepto\tImporte\n${h.day(1)}\tYa registrado\t100\n${h.day(2)}\tNuevo\t50`);
+  assert.deepEqual(h.json("[...state.importDraft.selectedRows]"), [3]);
+  h.run("state.importDraft.selectedRows.add(2);");
+  h.elements.get("#importSelectValid").emit("click");
+  assert.deepEqual(h.json("[...state.importDraft.selectedRows]"), [3]);
+  const label = /<button\b[^>]*\bid="importSelectValid"[^>]*>([\s\S]*?)<\/button>/u.exec(markup)?.[1];
+  assert.equal(visibleText(label || ""), "Seleccionar válidas sin duplicados");
+  assert.match(h.run("els.importReviewHelp.textContent"), /desmarca.*duplicados.*manualmente/iu);
+  assert.equal(h.storage.writes, 0);
+});
+
+function svgNodes(markup, tag, className) {
+  return [...markup.matchAll(new RegExp(`<${tag}\\b([^>]*?)(?:\\/>|>([\\s\\S]*?)<\\/${tag}>)`, "gu"))]
+    .map(([, attributes, text = ""]) => ({ attributes: Object.fromEntries([...attributes.matchAll(/([\w-]+)="([^"]*)"/gu)].map(([, key, value]) => [key, value])), text: visibleText(text) }))
+    .filter((node) => !className || node.attributes.class?.split(/\s+/u).includes(className));
+}
+
+test("R1: chart geometry follows narrow and wide containers without changing monetary data", () => {
+  const h = harness();
+  seed(h, [movement("income", h.day(1), { amount: 200.25 }), payment("payment", h.day(3), { amount: 50.10 })],
+    [{ id: "bank-a", name: "Banco A", balance: 1000 }]);
+  const before = h.json("state.custom");
+  const series = h.json("getForecastSeries(getFilteredMovements(), getAvailableBalance())");
+  const chart = h.elements.get("#forecastChart");
+  for (const [width, height] of [[320, 265], [375, 265], [1363, 320]]) {
+    chart.getBoundingClientRect = () => ({ width, height });
+    h.run("renderChart(getForecastSeries(getFilteredMovements(), getAvailableBalance()), { hasData: true });");
+    assert.deepEqual(chart.getAttribute("viewBox").split(/\s+/u).map(Number), [0, 0, width, height]);
+    const labels = svgNodes(chart.innerHTML, "text", "chart-axis-label");
+    const bottomLabelY = Math.max(...labels.map((node) => Number(node.attributes.y)));
+    const dateLabels = labels.filter((node) => Number(node.attributes.y) === bottomLabelY);
+    assert.ok(dateLabels.length >= 2 && dateLabels.length <= (width < 520 ? 4 : 8), `date tick density at ${width}px: ${dateLabels.length}`);
+    assert.match(dateLabels[0].text, /Hoy/u);
+    assert.ok(dateLabels.every((node) => !/20\d{2}/u.test(node.text)), "chart dates remain short");
+    for (const node of [...labels, ...svgNodes(chart.innerHTML, "circle")]) {
+      const x = Number(node.attributes.x ?? node.attributes.cx);
+      const y = Number(node.attributes.y ?? node.attributes.cy);
+      assert.ok(Number.isFinite(x) && x >= 0 && x <= width, `x ${x} lies inside ${width}px`);
+      assert.ok(Number.isFinite(y) && y >= 0 && y <= height, `y ${y} lies inside ${height}px`);
+    }
+    assert.deepEqual(h.json("state.custom"), before);
+    assert.deepEqual(h.json("getForecastSeries(getFilteredMovements(), getAvailableBalance())"), series);
+  }
+  assert.equal(h.storage.writes, 0);
+});
+
+test("R1: an empty projection places its guidance inside the narrow chart viewport", () => {
+  const h = harness();
+  seed(h, [], [{ id: "bank-a", name: "Banco A", balance: 0 }]);
+  const chart = h.elements.get("#forecastChart");
+  chart.getBoundingClientRect = () => ({ width: 320, height: 265 });
+  h.run("renderChart([], { hasData: false });");
+  assert.deepEqual(chart.getAttribute("viewBox").split(/\s+/u).map(Number), [0, 0, 320, 265]);
+  const lines = svgNodes(chart.innerHTML, "text");
+  assert.ok(lines.length >= 2);
+  assert.match(lines.map((line) => line.text).join(" "), /saldo.*banco.*cobro.*pago/iu);
+  for (const line of lines) {
+    assert.ok(Number(line.attributes.x) > 0 && Number(line.attributes.x) < 320);
+    assert.ok(Number(line.attributes.y) > 0 && Number(line.attributes.y) < 265);
+  }
+  assert.equal(h.storage.writes, 0);
+});
+
+test("R1: resizing redraws the chart while preserving the capture draft, rows and selection", () => {
+  const h = harness();
+  const chart = h.elements.get("#forecastChart");
+  let width = 1000;
+  chart.getBoundingClientRect = () => ({ width, height: 320 });
+  h.run("initialize();");
+  seed(h, [movement("keep", h.day(1), { amount: 50 })]);
+  h.run('setMode("custom"); els.movementConcept.value = "Captura pendiente"; els.movementAmount.value = "123.45"; state.selectedMovementIds.add("keep"); els.movementConcept.focus();');
+  const stateBefore = h.json("state.custom");
+  const rowsBefore = h.run("els.movementsTableBody.innerHTML");
+  const announcementBefore = h.run("els.liveRegion.textContent");
+  width = 375;
+  h.emitWindow("resize");
+  assert.deepEqual(chart.getAttribute("viewBox").split(/\s+/u).map(Number), [0, 0, 375, 320]);
+  assert.equal(h.run("els.movementConcept.value"), "Captura pendiente");
+  assert.equal(h.run("els.movementAmount.value"), "123.45");
+  assert.deepEqual(h.json("[...state.selectedMovementIds]"), ["keep"]);
+  assert.equal(h.run("els.movementsTableBody.innerHTML"), rowsBefore);
+  assert.equal(h.document.activeElement.id, "movementConcept");
+  assert.equal(h.run("els.liveRegion.textContent"), announcementBefore);
+  assert.deepEqual(h.json("state.custom"), stateBefore);
+  assert.equal(h.storage.writes, 0);
+});
+
+// Numeric contrast contracts use the authored colors (the WCAG calculation),
+// not screenshots or antialiasing. These are not a complete CSS/layout engine.
+function cssDeclarations(selector) {
+  const css = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8").replace(/\/\*[\s\S]*?\*\//gu, "");
+  const declarations = {};
+  for (const [, selectors, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)) {
+    if (!selectors.split(",").some((part) => part.trim() === selector)) continue;
+    for (const [, property, value] of body.matchAll(/([\w-]+)\s*:\s*([^;]+);?/gu)) declarations[property] = value.trim();
+  }
+  return declarations;
+}
+
+function cssColor(value, background = [1, 1, 1]) {
+  const variables = cssDeclarations(":root");
+  value = value.replace(/var\((--[\w-]+)\)/gu, (_, key) => variables[key]);
+  if (value === "white") value = "#ffffff";
+  if (value === "black") value = "#000000";
+  const hex = /^#([\da-f]{6})$/iu.exec(value);
+  if (hex) return [0, 2, 4].map((start) => parseInt(hex[1].slice(start, start + 2), 16) / 255);
+  const rgb = /^rgba?\(([^)]+)\)$/iu.exec(value);
+  assert.ok(rgb, `supported authored color: ${value}`);
+  const components = rgb[1].split(",").map(Number);
+  const alpha = components[3] ?? 1;
+  return components.slice(0, 3).map((component, index) => component / 255 * alpha + background[index] * (1 - alpha));
+}
+
+function contrastRatio(foreground, background) {
+  const luminance = (rgb) => rgb.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+    .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+  const values = [luminance(foreground), luminance(background)].sort((a, b) => a - b);
+  return (values[1] + 0.05) / (values[0] + 0.05);
+}
+
+test("UI4: financial amounts, monetary errors and chart labels meet normal-text contrast", () => {
+  for (const [selector, property, backgrounds] of [
+    [".amount-out", "color", ["#ffffff", "#f4f6f9", "#e4eeff"]],
+    [".money-input-error", "color", ["#ffffff"]],
+    [".chart-axis-label", "fill", ["#ffffff"]],
+  ]) {
+    const value = cssDeclarations(selector)[property];
+    assert.ok(value, `${selector} has an authored ${property}`);
+    for (const background of backgrounds) {
+      const bg = cssColor(background);
+      const contrast = contrastRatio(cssColor(value, bg), bg);
+      assert.ok(contrast >= 4.5, `${selector} on ${background}: ${contrast.toFixed(3)}:1 must be at least 4.5:1`);
+    }
+  }
+});
+
+test("UI5: authored focus rings, including the switch track, meet non-text contrast", () => {
+  for (const selector of ["input:focus-visible", ".switch input:focus-visible + .switch-track"]) {
+    const outline = cssDeclarations(selector).outline;
+    assert.ok(outline, `${selector} supplies a visible outline on the painted element`);
+    const color = outline.match(/(?:rgba?\([^)]*\)|var\([^)]*\)|#[\da-f]{6})/iu)?.[0];
+    assert.ok(color, `${selector} outline has a calculable color`);
+    for (const background of ["#ffffff", "#f4f6f9"]) {
+      const bg = cssColor(background);
+      const contrast = contrastRatio(cssColor(color, bg), bg);
+      assert.ok(contrast >= 3, `${selector}: ${contrast.toFixed(3)}:1 must be at least 3:1`);
+    }
+  }
 });
