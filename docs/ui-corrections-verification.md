@@ -14,7 +14,7 @@ Después de las correcciones pasan **234/234 casos**: contabilidad 11, Excel 12,
 
 | Requisito | Evidencia automatizada o inspección | Límite |
 | --- | --- | --- |
-| UI1 | `minmax(0, 1fr)`, ancho mínimo cero y división de palabras en el contenido de las alertas | La contención final se comprueba con el concepto de 70 letras en la página publicada. |
+| UI1 | `minmax(0, 1fr)` en alertas; celda de concepto con saltos de línea; auxiliares de accesibilidad anclados dentro de los contenedores de tabla | La contención final se comprueba con el concepto de 70 letras en la página publicada, incluido el desplazamiento de una tabla ancha. |
 | UI2 | Borrador inválido → vacío, saldo anterior intacto, cero escrituras y mensajes de otras operaciones conservados | El adaptador DOM prueba eventos delegados; no sustituye eventos nativos del navegador. |
 | UI3 | Dos pagos del mismo día y mes de 2025/2026 se distinguen en tabla, captura y grupos; ISO intacto | Las etiquetas del eje usan el formato corto separado. |
 | UI4 | Cálculo de luminancia de colores declarados, incluidos fondos de selección | No es una auditoría completa de todas las combinaciones de la aplicación. |
@@ -55,7 +55,7 @@ node tests/treasury-import.test.cjs
 
 ## Comprobación en la versión publicada
 
-1. En el ejemplo, editar un concepto de pago con 70 letras sin espacios. Verificar que la señal permanece dentro de la tarjeta y la página no crece horizontalmente. Recargar restaura el ejemplo.
+1. En el ejemplo, editar un concepto de pago con 70 letras sin espacios. Verificar que la señal permanece dentro de la tarjeta y que el ancho desplazable del documento no supera su ancho de cliente, incluso tras desplazar una tabla. Las tablas pueden tener desplazamiento propio sin ampliar la página. Recargar restaura el ejemplo.
 2. En una cuenta de prueba, escribir un saldo inválido, salir, vaciar y salir otra vez: debe volver el saldo previo sin una alerta persistente en captura. Un nombre formado por espacios también debe restaurarse.
 3. Usar Tab hasta el interruptor de pendientes y comprobar el contorno visible.
 4. Abrir el importador, pegar una tabla ficticia y avanzar: Columnas debe recibir el foco; en Revisar, comprobar el nombre del botón y la exclusión de duplicados sin confirmar la importación.
