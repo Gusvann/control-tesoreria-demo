@@ -95,7 +95,7 @@ test("Accounting: input and focus presentation retain values through repeated ed
   }
   assert.equal(accounting.inputValue(1234.5), "1,234.50");
   assert.equal(accounting.editingValue(1234.5), "1234.50");
-  assert.equal(accounting.inputValue(0), "—");
+  assert.equal(accounting.inputValue(0), "0.00");
   assert.equal(accounting.editingValue(0), "0.00");
 });
 
@@ -116,4 +116,12 @@ test("Accounting: browser loading exposes the same frozen API without DOM depend
   assert.equal(context.TreasuryAccounting.format(-1234.5), "($1,234.50)");
   assert.equal(context.TreasuryAccounting.parseInput("$1,234.50"), 1234.5);
   assert.equal(Object.isFrozen(context.TreasuryAccounting), true);
+});
+
+test("Accounting: editable zero is numeric while report zero remains an accounting dash", () => {
+  for (const amount of [0, -0]) {
+    assert.equal(accounting.inputValue(amount), "0.00");
+    assert.equal(accounting.parseInput(accounting.inputValue(amount)), 0);
+    assert.equal(accounting.format(amount), "$—");
+  }
 });
