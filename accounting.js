@@ -81,7 +81,9 @@
 
   function inputValue(value) {
     const parsed = typeof value === "number" ? parseInput(value) : NaN;
-    return Number.isFinite(parsed) ? formatNumber(parsed) : String(value ?? "");
+    // Accounting reports show zero as a dash, but editable fields must contain
+    // an actual number: a dash can accidentally become part of the next entry.
+    return Number.isFinite(parsed) ? (parsed === 0 ? "0.00" : formatNumber(parsed)) : String(value ?? "");
   }
 
   function editingValue(value) {
