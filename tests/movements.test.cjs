@@ -54,6 +54,7 @@ class Element {
     for (const listener of this.listeners.get(type) || []) listener(event);
   }
   focus() { this.focused = true; }
+  select() { this.selectionInvoked = true; }
   scrollIntoView() {}
   showModal() { this.open = true; }
   close() { this.open = false; this.emit("close"); }
@@ -2142,7 +2143,8 @@ test("ACC input events: focus preserves the draft; blur formats cents without ch
   amount.dataset.moneyError = "movementAmountError";
   amount.value = "1,234.50";
   amount.emit("focus");
-  assert.equal(amount.value, "1,234.50", "focus must not rewrite text while a user selects or pastes");
+  assert.equal(amount.value, "1234.50", "focus must expose plain decimal text before typing");
+  assert.equal(amount.selectionInvoked, true, "the draft must be ready to replace without appending to separators");
   amount.value = "$2,345.67";
   amount.emit("input");
   assert.equal(amount.value, "$2,345.67", "typing must not rewrite the field or jump the cursor");
@@ -2150,13 +2152,13 @@ test("ACC input events: focus preserves the draft; blur formats cents without ch
   assert.equal(amount.value, "2,345.67");
   assert.equal(accountingModule.parseInput(amount.value), 2345.67);
   amount.emit("focus");
-  assert.equal(amount.value, "2,345.67");
+  assert.equal(amount.value, "2345.67");
   let prevented = false;
   h.elements.get("#movementForm").emit("keydown", {
     target: amount, key: "Enter", isComposing: false, preventDefault() { prevented = true; },
   });
   assert.equal(prevented, true);
-  assert.equal(amount.value, "2,345.67");
+  assert.equal(amount.value, "2345.67");
   amount.value = "1.001";
   amount.emit("input");
   amount.emit("blur");
@@ -2180,7 +2182,8 @@ test("ACC bank events: typing does not save; failed blur retains the draft and a
   Object.assign(balance.dataset, { field: "balance", moneyInput: "balance", scenarioId: "base", moneyError: "bank-balance-error-test" });
   balance.value = "1,000.00";
   editor.emit("focusin", { target: balance });
-  assert.equal(balance.value, "1,000.00", "focusing a bank balance must preserve its text");
+  assert.equal(balance.value, "1000.00", "bank focus exposes editable numeric text");
+  assert.equal(balance.selectionInvoked, true, "bank focus selects its contents for replacement");
   balance.value = "2,000.25";
   editor.emit("input", { target: balance });
   assert.equal(h.run("state.custom.accounts[0].balance"), 1000);
@@ -2205,8 +2208,8 @@ test("ACC bank events: typing does not save; failed blur retains the draft and a
   balance.value = "";
   editor.emit("input", { target: balance });
   editor.emit("focusout", { target: balance });
-  assert.equal(balance.value, "", "an empty draft must remain available to correct");
-  assert.equal(balance.getAttribute("aria-invalid"), "true");
+  assert.equal(balance.value, "2,000.25", "empty bank drafts restore the last saved balance automatically");
+  assert.equal(balance.getAttribute("aria-invalid"), null);
   assert.deepEqual(h.saved(), saved);
   assert.equal(h.run("state.custom.accounts[0].balance"), 2000.25, "an empty input must never turn a bank balance into zero");
   assert.equal(h.storage.writes, 1);
@@ -2344,4 +2347,85 @@ test("STABILITY: legacy subcent payments reconcile forecast, totals and categori
   assert.equal(h.run("getSelectionTotals(state.custom.movements).outflows"), 0);
   assert.equal(h.run("getPaymentGroups(state.custom.movements).at(-1).total"), 0);
   assert.equal(h.run("getForecastSeries(getFilteredMovements(), getAvailableBalance()).at(-1).balance"), 100);
+});
+
+test("MONEY UX: opening a zero bank field never creates a validation error", () => {
+  const h = harness();
+  seed(h, [], [{ id: "zero-bank", name: "Banco nuevo", balance: 0 }]);
+  h.run("bindEvents(); renderBanksEditor();");
+  assert.match(h.run("els.banksEditor.innerHTML"), /value="0\.00"/);
+  const editor = h.elements.get("#banksEditor");
+  const row = new Element("DIV");
+  row.dataset.bankId = "zero-bank";
+  const input = new Element("INPUT");
+  input.parentElement = row;
+  Object.assign(input.dataset, { field: "balance", moneyInput: "balance", scenarioId: "base", moneyError: "bank-balance-error-zero" });
+  input.value = "0.00";
+  editor.emit("focusin", { target: input });
+  assert.equal(input.value, "0.00");
+  assert.equal(input.selectionInvoked, true);
+  assert.equal(input.validationMessage, "");
+  editor.emit("focusout", { target: input });
+  assert.equal(input.value, "0.00");
+  assert.equal(input.getAttribute("aria-invalid"), null);
+  assert.equal(h.storage.writes, 0);
+  assert.equal(h.run("els.captureFeedback.textContent"), "");
+});
+
+test("MONEY UX: typing a bank balance formats automatically on blur and preserves exact cents", () => {
+  const h = harness();
+  seed(h, [], [{ id: "bank-a", name: "Banco A", balance: 0 }]);
+  h.run("bindEvents();");
+  const editor = h.elements.get("#banksEditor");
+  const row = new Element("DIV"); row.dataset.bankId = "bank-a";
+  const input = new Element("INPUT"); input.parentElement = row;
+  Object.assign(input.dataset, { field: "balance", moneyInput: "balance", scenarioId: "base", moneyError: "bank-balance-error-auto" });
+  input.value = "0.00";
+  editor.emit("focusin", { target: input });
+  input.value = "25000.5";
+  editor.emit("input", { target: input });
+  assert.equal(input.value, "25000.5", "typing must not jump the cursor");
+  assert.equal(h.storage.writes, 0);
+  editor.emit("focusout", { target: input });
+  assert.equal(input.value, "25,000.50");
+  assert.equal(h.saved().accounts[0].balance, 25000.5);
+  assert.equal(input.validationMessage, "");
+  assert.equal(input.getAttribute("aria-invalid"), null);
+  assert.equal(h.storage.writes, 1);
+});
+
+test("MONEY UX: editing and duplicating formatted amounts never treats commas as an invalid user entry", () => {
+  const h = harness();
+  seedTreasury(h, [payment("p", h.day(1), { amount: 1234.56 })]);
+  h.run("bindEvents(); openMovementEditor(['p']);");
+  const field = h.elements.get("#editMovementAmount");
+  field.emit("focus");
+  assert.equal(field.value, "1234.56");
+  assert.equal(field.selectionInvoked, true);
+  field.value = "7654.3";
+  field.emit("input");
+  field.emit("blur");
+  assert.equal(field.value, "7,654.30");
+  assert.equal(field.validationMessage, "");
+  h.run("submitMovementEdit(input)", { preventDefault() {} });
+  assert.equal(h.saved().movements[0].amount, 7654.3);
+});
+
+test("MONEY UX: blank bank fields cancel the change instead of displaying a formatting error or saving zero", () => {
+  const h = harness();
+  seed(h, [], [{ id: "bank-a", name: "Banco A", balance: 9876.54 }]);
+  h.run("bindEvents();");
+  const editor = h.elements.get("#banksEditor");
+  const row = new Element("DIV"); row.dataset.bankId = "bank-a";
+  const input = new Element("INPUT"); input.parentElement = row;
+  Object.assign(input.dataset, { field: "balance", moneyInput: "balance", scenarioId: "base", moneyError: "bank-balance-error-clear" });
+  input.value = "9,876.54";
+  editor.emit("focusin", { target: input });
+  assert.equal(input.value, "9876.54");
+  input.value = "";
+  editor.emit("focusout", { target: input });
+  assert.equal(input.value, "9,876.54");
+  assert.equal(input.validationMessage, "");
+  assert.equal(h.run("state.custom.accounts[0].balance"), 9876.54);
+  assert.equal(h.storage.writes, 0);
 });
